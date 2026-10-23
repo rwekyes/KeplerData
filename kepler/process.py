@@ -144,6 +144,44 @@ def search_again_with_dips_protected(light_curve, signal, window_days=1.0):
     return flat, signal
 
 
+def measure_known_planet(light_curve, planet, window_days=1.0):
+    """Use an orbit astronomers already published, and measure how deep its dips are in our data."""
+    duration = planet["duration_hours"] / 24
+    if not duration > 0:  # the archive leaves some durations blank
+        duration = _expected_dip_length(planet["period_days"])
+    signal = Signal(planet["period_days"], planet["transit_time"], duration, depth=0.0)
+    flat = remove_outliers(flatten(light_curve, window_days, transit_mask(light_curve, signal)))
+
+    # Compare the middle of each dip with the time around the dips.
+    flux = plain_numbers(flat.flux)
+    middle = flat.create_transit_mask(period=signal.period, transit_time=signal.transit_time,
+                                      duration=duration / 2)
+    signal.depth = float(flux[~transit_mask(flat, signal)].mean() - flux[middle].mean())
+    return flat, signal
+
+
+def find_second_eclipse(light_curve, signal):
+    """Hide the deep eclipses and search the same orbit again: what's left is the shallow one."""
+    hidden = light_curve[~transit_mask(light_curve, signal)]
+    _, second = search_for_planet(hidden, signal.period * 0.999, signal.period * 1.001)
+    return second
+
+
+def find_dips(light_curve, threshold=0.01, gap_days=5):
+    """Find stretches where the star dims by more than 1%, and how deep each one gets."""
+    time = light_curve.time.value
+    flux = plain_numbers(light_curve.flux)
+    dim = np.flatnonzero(flux < 1 - threshold)
+    dips = []
+    # Measurements within a few days of each other belong to the same dip.
+    for group in np.split(dim, np.flatnonzero(np.diff(time[dim]) > gap_days) + 1):
+        if len(group):
+            deepest = group[np.argmin(flux[group])]
+            dips.append({"start": time[group[0]], "end": time[group[-1]],
+                         "deepest_time": time[deepest], "depth": 1 - flux[deepest]})
+    return dips
+
+
 def planet_radius(signal, star_radius_suns):
     """A planet blocks (its size / star's size)² of the light, so size = star size × √depth."""
     return star_radius_suns * EARTH_RADII_PER_SUN * np.sqrt(signal.depth)

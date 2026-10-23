@@ -94,7 +94,9 @@ before class.
 
 - **Load time (local):** about 20 s for a cold first visit (name lookup, archive,
   download, 9 s search), then about 1 s for each rerun from the cache.
-  **Still not timed on Community Cloud.** Do it on the first push of the real app.
+  **On Community Cloud (2026-10-22, after a fresh reboot):** about 5 s to look up
+  and load a new star (Kepler-17). Period search time on the cloud is not
+  confirmed yet.
 - **Plotly draws WebGL (`Scattergl`) traces above regular SVG traces**, whatever
   order you add them in. A plot that mixes thousands of points with a few
   highlight marks must make all of them WebGL, or the highlights end up hidden.
@@ -158,6 +160,51 @@ before class.
 - **Screenshot gotcha:** headless Chrome's full-page capture
   (`captureBeyondViewport`) draws Streamlit's sidebar shifted left. Use a
   normal viewport screenshot when checking the sidebar.
+
+### Findings from M4
+
+- **Kepler-90 at short orbits (0.5–20 d) finds 18.42 d, not b, c, or i.** The
+  deep, half-day-long dips of g and h line up at a wrong orbit and outscore the
+  small inner planets. Limiting the longest dip searched to what each orbit
+  allows (1.5× a Sun-like star's) did *not* fix it, and didn't help anywhere
+  else, so it was dropped. This is M5's job: find h, hide its dips, search
+  again. For now Kepler-90 starts at 100–400 d, which finds h (11.6× Earth vs.
+  NASA's 11.25×).
+- **Kepler-22 is fooled by two glitches.** All four of b's real dips are in
+  the data (each about 400 ppm, at days 134, 424, 713, and 1003; the fifth
+  falls in a gap). Two deeper fake dips (about 1,200 ppm) near day 573
+  (mid-quarter) and day 1581 (the very end of the data) line up at 336 d and
+  281 d, so even a 200–300 d range finds the wrong orbit. lightkurve's stricter
+  quality masks (`hard`, `hardest`) don't remove them. The flattened dip looks
+  deeper than the raw sag, so flattening may be making it worse. We kept it as
+  a lesson (few dips means one glitch can fool you) rather than chasing it.
+- **"Fold on NASA's orbit" (step ⑤)** measures a known planet's dip at its
+  published orbit, with the dips protected during flattening. Sizes vs. NASA:
+  Kepler-22 b 2.16 vs. 2.10; Kepler-90 b 1.18 vs. 1.31, c 1.53 vs. 1.19,
+  i 1.05 vs. 1.32, d 3.08 vs. 2.87, e 2.72 vs. 2.66, f 2.84 vs. 2.88,
+  h 11.67 vs. 11.25. **Kepler-90 g is the outlier (5.3 vs. 7.7):** its dips
+  are known to arrive hours early or late (planets tugging on each other), so
+  stacking blurs them. Any comparison off by more than 25% gets that note.
+- **Kepler-16:** the search finds the 41.08 d binary orbit (11.5% deep). Hiding
+  those eclipses and searching the same orbit again finds the shallow eclipse
+  20.0 d later. The flattening put "shoulders" around it (up to +0.3%), so we
+  flatten again with both eclipses protected and re-measure: 1.3% as a box
+  average, about 1.5% at the bottom. Treated as a planet, the deep eclipse
+  gives 0.22× the Sun's size: clearly a star.
+- **Boyajian's Star stops after cleaning, not flattening.** A 1-day flatten
+  would erase dips that last 2–10 days. `find_dips` finds four from the data:
+  Mar 5, 2011 (14%), Mar 1, 2013 (21%), Mar 21, 2013 (3%), Apr 18, 2013 (8%).
+- **Streamlit sliders: `value=` decides one handle or two.** Leaving it out and
+  setting the value through session state gives a single-handle slider, which
+  crashes the period range on the first drag. Each star now gets its own slider
+  keys (`periods <star>`), created with that star's defaults. Streamlit
+  discards a slider's state once it's off screen, so switching stars always
+  starts from that star's defaults.
+- **The archive files Kepler-90 as "KOI-351"** (system name), so `find_star`
+  keeps the archive's spelling of the name you typed, and `known_planets`
+  relabels "KOI-351 b" as "Kepler-90 b".
+- **Blurbs in `kepler/targets.py` are from memory, like the table below.**
+  Verify them before quoting them in the report.
 
 ## Where it runs
 
@@ -226,7 +273,8 @@ These facts are from memory. Verify them against your sources for the report.
 
 Not every star suits the full pipeline. Each featured target lists the steps it
 runs. Kepler-16 shows its eclipses instead of a planet search, and Boyajian's
-Star stops after flattening and gets an annotated "what are these dips?" plot.
+Star stops after cleaning (flattening would erase its days-long dips) and gets
+a lettered "what are these dips?" plot.
 Stars that come in through search get the standard pipeline.
 
 ## Code layout
@@ -303,6 +351,10 @@ The "Show the code" panels use `inspect.getsource()` on the functions in
 ## Phase 4 — Deploy
 
 - [ ] Push to GitHub; deploy on Community Cloud; confirm live downloads work from the cloud host
+- **After every push that changes `kepler/`, reboot the app** (Manage app → ⋮ →
+  Reboot app). Community Cloud picks up the new `app.py` but keeps the old
+  `kepler` modules loaded, so new functions show up as `AttributeError`. This
+  happened after the M3 push.
 - [ ] Load test: a few people searching different stars at once without hitting memory limits
 - [ ] Share the link with the class
 
@@ -312,7 +364,7 @@ The "Show the code" panels use `inspect.getsource()` on the functions in
 - [x] **M1** Kepler-10 end to end in plain functions: download, clean, find the planet, fold
 - [x] **M2** Streamlit app with the step flow, explanations, "Show the code," and Plotly plots, for Kepler-10
 - [x] **M3** Search box with friendly errors; sidebar settings wired up
-- [ ] **M4** All featured targets, including per-target behavior for Kepler-16 and Boyajian's Star
+- [x] **M4** All featured targets, including per-target behavior for Kepler-16 and Boyajian's Star
 - [ ] **M5** Kepler-90 multi-planet section
 - [ ] **M6** Bundled fallback data plus a test run with Wi-Fi off for the featured targets
 - [ ] **M7** Presentation mode; dress rehearsal on the projector, timed to fit 10–20 min

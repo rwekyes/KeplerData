@@ -54,14 +54,23 @@ def find_star(name, timeout=10):
     aliases = _lookup_aliases(name, timeout)
     kic = re.fullmatch(r"KIC\s*(\d+)", name, flags=re.IGNORECASE)
     if kic:
-        return Star(aliases[0] if aliases else name, int(kic.group(1)), aliases)
+        return Star(_usual_name(name, aliases), int(kic.group(1)), aliases)
     if not aliases:
         aliases = _lookup_with_mast(name)
 
     kic_names = [a for a in aliases if a.startswith("KIC ")]
     if kic_names:
-        return Star(aliases[0], int(kic_names[0].removeprefix("KIC ")), aliases)
-    raise NotObservedByKepler(_why_not_kepler(aliases[0], aliases))
+        return Star(_usual_name(name, aliases), int(kic_names[0].removeprefix("KIC ")), aliases)
+    raise NotObservedByKepler(_why_not_kepler(_usual_name(name, aliases), aliases))
+
+
+def _usual_name(name, aliases):
+    """The archive's spelling of the name we were given ("kepler 90" → "Kepler-90"),
+    or else the archive's main name for the star."""
+    def simplify(text):
+        return re.sub(r"[\s-]", "", text).lower()
+    same = [a for a in aliases if simplify(a) == simplify(name)]
+    return same[0] if same else (aliases[0] if aliases else name)
 
 
 def suggest_name(name):
@@ -166,8 +175,15 @@ def known_planets(star):
         "tran_flag": "transits",
     })
     planets["transit_time"] -= BKJD_OFFSET     # switch to Kepler's clock
+    planets["name"] = [_rename_planet(name, star) for name in planets["name"]]
     planets["transits"] = planets["transits"] == 1  # some planets never pass in front of their star
     return planets.sort_values("period_days").reset_index(drop=True)
+
+
+def _rename_planet(planet, star):
+    """Label planets by the star's usual name: Kepler-90's planets are filed as "KOI-351 b"."""
+    host, _, letter = planet.rpartition(" ")
+    return f"{star.name} {letter}" if host in star.aliases else planet
 
 
 def star_radius(planets, quarters):

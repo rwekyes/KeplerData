@@ -113,6 +113,45 @@ def folded(folded_lc, signal):
     return _style(fig, "Hours from the middle of the dip", "Brightness change (ppm)")
 
 
+def eclipse(folded_lc, signal):
+    """One eclipse, zoomed in: every orbit stacked, in percent."""
+    hours = folded_lc.time.value * 24
+    percent = _percent(folded_lc.flux)
+    window = 3 * signal.duration * 24  # hours to show on each side
+    near = np.abs(hours) < window
+    hours, percent = hours[near], percent[near]
+    bin_hours, bin_percent = _averages(hours, percent, width=signal.duration * 24 / 8)
+    fig = go.Figure([
+        go.Scattergl(
+            x=hours, y=percent, name="Single measurements", mode="markers",
+            marker=dict(size=3, color=FAINT_POINTS), hoverinfo="skip",
+        ),
+        go.Scattergl(
+            x=bin_hours, y=bin_percent, name="Averages", mode="markers",
+            marker=dict(size=9, color=BLUE, line=dict(color="white", width=2)),
+            hovertemplate="%{x:+.1f} h<br>%{y:+.2f}%<extra>Average</extra>",
+        ),
+    ])
+    fig.update_layout(showlegend=False)  # two of these sit side by side; the caption explains the colors
+    fig.update_xaxes(range=[-window, window])
+    return _style(fig, "Hours from the middle of the eclipse", "Brightness change (%)")
+
+
+def dips(lc, found):
+    """The whole light curve in percent, with each big dip lettered."""
+    fig = go.Figure(go.Scattergl(
+        x=_dates(lc.time.value), y=_percent(lc.flux), mode="markers",
+        marker=dict(size=2, color=BLUE),
+        hovertemplate="%{x|%b %d, %Y}<br>%{y:+.1f}%<extra></extra>",
+    ))
+    for letter, dip in zip("ABCDEFGHIJ", found):
+        fig.add_annotation(x=_dates(dip["deepest_time"]), y=-dip["depth"] * 100, text=f"<b>{letter}</b>",
+                           showarrow=True, arrowcolor=MUTED_INK, ax=0, ay=28, font=dict(color=INK, size=20))
+    fig.update_xaxes(type="date")
+    fig.update_yaxes(range=[-100 * max(d["depth"] for d in found) - 6, 3] if found else None)
+    return _style(fig, None, "Brightness change (%)")
+
+
 def _style(fig, x_title, y_title):
     """Big text, light gridlines, and nothing that needs a wide screen."""
     fig.update_layout(
@@ -137,6 +176,10 @@ def _dates(kepler_days):
 
 def _ppm(flux):
     return (plain_numbers(flux) - 1) * 1e6
+
+
+def _percent(flux):
+    return (plain_numbers(flux) - 1) * 100
 
 
 def _averages(x, y, width):

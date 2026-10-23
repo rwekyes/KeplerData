@@ -149,9 +149,10 @@ def planet_radius(signal, star_radius_suns):
     return star_radius_suns * EARTH_RADII_PER_SUN * np.sqrt(signal.depth)
 
 
-def closest_known_planet(planets, signal):
-    """The known planet whose orbit best matches what we found (None if the star has none)."""
-    transiting = planets[planets["transits"]]
-    if transiting.empty:
+def matching_known_planet(planets, signal, tolerance=0.01):
+    """The known planet whose orbit matches what we found to within 1% (None if none does)."""
+    transiting = planets[planets["transits"]].dropna(subset=["period_days"])
+    mismatch = (transiting["period_days"] - signal.period).abs() / transiting["period_days"]
+    if transiting.empty or mismatch.min() > tolerance:
         return None
-    return transiting.iloc[(transiting["period_days"] - signal.period).abs().argmin()]
+    return transiting.loc[mismatch.idxmin()]

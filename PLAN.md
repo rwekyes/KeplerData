@@ -114,6 +114,51 @@ before class.
 - **Box depth vs. real dip:** the fold plot shows it directly. The flat box sits
   above the curved bottom of the averages. That's a nice talking point in class.
 
+### Findings from M3
+
+- **How the two name services answer (measured):**
+
+  | Input | Planet archive alias lookup | MAST name resolver |
+  |---|---|---|
+  | Known names (`kepler10`, `Kepler 10`, `KOI-72`, `KIC 11904151`) | about 3.5–4 s | about 1 s |
+  | Typos, gibberish, bare numbers, nicknames (`Boyajian's Star`) | never answers (more than 60 s) | about 11 s to say "not found"; knows `Boyajian's Star` (but not `Tabby's Star`) |
+  | TESS-only stars (`TOI-700`, `51 Peg`) | about 3.5 s, with a TIC number but no KIC | — |
+
+  So `find_star` tries the archive (10 s timeout) and then MAST, and finds the
+  KIC number in MAST's TESS catalog (its `KIC` column, about 3.6 s). Worst
+  case, a typo takes about 21 s to report. This fixes the M2 "Kepler-10 not
+  found" flake: a slow archive now falls through to MAST instead of failing.
+- **Three friendly errors:** *not found* (with a "Did you mean Kepler-10?"
+  button for near-misses of Kepler/KOI/KIC names), *not a Kepler star* (TESS
+  stars and K2 stars get their own explanation, as does a catalog star Kepler
+  never recorded), and *can't reach NASA* (with a Try again button). Tested
+  offline by pointing `HTTPS_PROXY` at a dead port. "Not found" answers are
+  cached, so a typo doesn't trigger another 21 s lookup on every slider move.
+- **Watch out: lightkurve's `search_lightcurve` returns an empty result, not an
+  error, when MAST can't resolve a name.** We always search by `KIC <number>`,
+  so this doesn't bite us, but it would make a name search look like "no data".
+- **Kepler's FITS headers carry the star's size** (`RADIUS`, from the Kepler
+  catalog), so planet sizes work even for stars the planet archive doesn't
+  list. The archive's value is preferred when it has one.
+- **Matching known planets now needs orbits within 1% of each other.** Before,
+  any star's strongest signal would be "matched" to the nearest known planet,
+  however far off.
+- **Slider effects (Kepler-10):** at a 0.1-day flatten window, Kepler-10 b
+  disappears completely (the strongest signal becomes noise at 13.4 d). At
+  0.25 d it's found, but the first pass shaves its depth from 142 to 90 ppm
+  (the protected second pass restores 152 ppm). Good live demo.
+- **Search time vs. orbit range:** 0.5–20 d about 9 s, 0.5–100 d about 14 s,
+  0.5–400 d about 24 s (local).
+- **Kepler-22 at 0.5–400 d finds 336 d, not the real 290 d.** It's a
+  three-transit planet, so the search can fool itself: if a wrong period puts
+  most of its predicted dips in data gaps, the one real dip it does catch can
+  still fit well. The app correctly says "doesn't match". Fix in M4 with
+  Kepler-22's own settings (narrower range, and maybe requiring 2+ dips
+  actually seen).
+- **Screenshot gotcha:** headless Chrome's full-page capture
+  (`captureBeyondViewport`) draws Streamlit's sidebar shifted left. Use a
+  normal viewport screenshot when checking the sidebar.
+
 ## Where it runs
 
 - **In class:** run locally on your laptop (`streamlit run app.py`) and open it
@@ -266,7 +311,7 @@ The "Show the code" panels use `inspect.getsource()` on the functions in
 - [x] **M0** Environment installs; `streamlit hello` works locally; hello-world app deploys to Community Cloud
 - [x] **M1** Kepler-10 end to end in plain functions: download, clean, find the planet, fold
 - [x] **M2** Streamlit app with the step flow, explanations, "Show the code," and Plotly plots, for Kepler-10
-- [ ] **M3** Search box with friendly errors; sidebar settings wired up
+- [x] **M3** Search box with friendly errors; sidebar settings wired up
 - [ ] **M4** All featured targets, including per-target behavior for Kepler-16 and Boyajian's Star
 - [ ] **M5** Kepler-90 multi-planet section
 - [ ] **M6** Bundled fallback data plus a test run with Wi-Fi off for the featured targets

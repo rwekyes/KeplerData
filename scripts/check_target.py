@@ -40,10 +40,10 @@ def main():
     _, signal = step("search again, masked", process.search_again_with_dips_protected,
                      light_curve, signal, args.window_days)
 
-    match = process.closest_known_planet(planets, signal)
+    match = process.matching_known_planet(planets, signal)
     print()
     if match is None:
-        print(f"  Found: period {signal.period:.4f} d, depth {signal.depth * 1e6:.0f} ppm (no known planets to compare)")
+        print(f"  Found: period {signal.period:.4f} d, depth {signal.depth * 1e6:.0f} ppm (doesn't match any known planet)")
         return
     radius = process.planet_radius(signal, match["star_radius_suns"])
     rows = [
@@ -52,7 +52,7 @@ def main():
         ("duration (hours)", signal.duration * 24, match["duration_hours"]),
         ("radius (Earths)", radius, match["radius_earths"]),
     ]
-    print(f"  Closest known planet: {match['name']}")
+    print(f"  Matching known planet: {match['name']}")
     print(f"  {'':<18}{'ours':>10}{'archive':>10}{'diff':>9}")
     for label, ours, theirs in rows:
         print(f"  {label:<18}{ours:>10.4g}{theirs:>10.4g}{(ours - theirs) / theirs:>+9.1%}")

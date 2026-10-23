@@ -1,0 +1,5 @@
+# Light theme and larger text, so the app reads well on a projector.
+[theme]
+base = "light"
+primaryColor = "#2a78d6"
+baseFontSize = 18

@@ -37,19 +37,14 @@ def main():
     print(f"    {len(quarters)} quarters, {len(flat):,} measurements")
     _, signal = step("search for planet", process.search_for_planet, flat, args.min_period, args.max_period)
 
-    # Second pass: re-flatten with the transits protected, so flattening
-    # doesn't shave off part of the dip and make the planet look smaller.
-    mask = process.transit_mask(light_curve, signal)
-    flat = process.remove_outliers(process.flatten(light_curve, args.window_days, transit_mask=mask))
-    _, signal = step("search again, masked", process.search_for_planet, flat,
-                     signal.period * 0.999, signal.period * 1.001)
+    _, signal = step("search again, masked", process.search_again_with_dips_protected,
+                     light_curve, signal, args.window_days)
 
-    transiting = planets[planets["transits"]]
+    match = process.closest_known_planet(planets, signal)
     print()
-    if transiting.empty:
+    if match is None:
         print(f"  Found: period {signal.period:.4f} d, depth {signal.depth * 1e6:.0f} ppm (no known planets to compare)")
         return
-    match = transiting.iloc[(transiting["period_days"] - signal.period).abs().argmin()]
     radius = process.planet_radius(signal, match["star_radius_suns"])
     rows = [
         ("period (days)", signal.period, match["period_days"]),

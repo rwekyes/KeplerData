@@ -90,6 +90,30 @@ before class.
   but cloud CPUs may be slower. Time it on Community Cloud in M2, and consider
   narrower default ranges per target.
 
+### Findings from M2
+
+- **Load time (local):** about 20 s for a cold first visit (name lookup, archive,
+  download, 9 s search), then about 1 s for each rerun from the cache.
+  **Still not timed on Community Cloud.** Do it on the first push of the real app.
+- **Plotly draws WebGL (`Scattergl`) traces above regular SVG traces**, whatever
+  order you add them in. A plot that mixes thousands of points with a few
+  highlight marks must make all of them WebGL, or the highlights end up hidden.
+- **Date axes for free:** Kepler's clock (days since noon on 1 Jan 2009) converts
+  to milliseconds since 1970, which Plotly date axes accept as plain numbers.
+  The audience sees "Jul 2011", not "BKJD 920".
+- **The period search curve has about 104k points.** We plot only the highest
+  point in each stretch of about 26 points, so no peak gets lost and the page
+  stays light on phones.
+- **Kepler-10 is missing every fourth quarter.** It fell on one of Kepler's dead
+  camera chips. The gaps in the plots are real, not a bug.
+- **Name lookup can time out:** one test run reported Kepler-10 as "not found"
+  because the archive's alias service took longer than the 10 s timeout.
+  Usually it takes about 3.5 s. A timeout and an unknown name look the same
+  today. Fix in M3 (a message saying "the archive is slow, try again") and M6
+  (store each featured target's KIC so it never needs a lookup).
+- **Box depth vs. real dip:** the fold plot shows it directly. The flat box sits
+  above the curved bottom of the averages. That's a nice talking point in class.
+
 ## Where it runs
 
 - **In class:** run locally on your laptop (`streamlit run app.py`) and open it
@@ -241,7 +265,7 @@ The "Show the code" panels use `inspect.getsource()` on the functions in
 
 - [x] **M0** Environment installs; `streamlit hello` works locally; hello-world app deploys to Community Cloud
 - [x] **M1** Kepler-10 end to end in plain functions: download, clean, find the planet, fold
-- [ ] **M2** Streamlit app with the step flow, explanations, "Show the code," and Plotly plots, for Kepler-10
+- [x] **M2** Streamlit app with the step flow, explanations, "Show the code," and Plotly plots, for Kepler-10
 - [ ] **M3** Search box with friendly errors; sidebar settings wired up
 - [ ] **M4** All featured targets, including per-target behavior for Kepler-16 and Boyajian's Star
 - [ ] **M5** Kepler-90 multi-planet section

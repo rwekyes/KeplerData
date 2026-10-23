@@ -50,8 +50,8 @@ def search_for_planet(light_curve, min_period=0.5, max_period=20):
     the strongest signal found.
     """
     time = light_curve.time.value
-    flux = _plain(light_curve.flux)
-    flux_err = _plain(light_curve.flux_err)
+    flux = plain_numbers(light_curve.flux)
+    flux_err = plain_numbers(light_curve.flux_err)
 
     # Quick search on hourly averages, which is twice as fast...
     hourly = _hourly_averages(time, flux, flux_err)
@@ -114,7 +114,7 @@ def _expected_dip_length(period):
     return 13 / 24 * (period / 365.25) ** (1 / 3)
 
 
-def _plain(values):
+def plain_numbers(values):
     """Plain numbers without units or masks, which BoxLeastSquares needs."""
     values = getattr(values, "value", values)
     return np.asarray(getattr(values, "unmasked", values), dtype=float)
@@ -132,6 +132,26 @@ def transit_mask(light_curve, signal):
     )
 
 
+def search_again_with_dips_protected(light_curve, signal, window_days=1.0):
+    """Flatten again with the dips we found protected, then re-measure them.
+
+    The first flatten can't tell a dip from a slow trend, so it shaves a little
+    off each dip and the planet looks smaller than it is.
+    """
+    mask = transit_mask(light_curve, signal)
+    flat = remove_outliers(flatten(light_curve, window_days, transit_mask=mask))
+    _, signal = search_for_planet(flat, signal.period * 0.999, signal.period * 1.001)
+    return flat, signal
+
+
 def planet_radius(signal, star_radius_suns):
     """A planet blocks (its size / star's size)² of the light, so size = star size × √depth."""
     return star_radius_suns * EARTH_RADII_PER_SUN * np.sqrt(signal.depth)
+
+
+def closest_known_planet(planets, signal):
+    """The known planet whose orbit best matches what we found (None if the star has none)."""
+    transiting = planets[planets["transits"]]
+    if transiting.empty:
+        return None
+    return transiting.iloc[(transiting["period_days"] - signal.period).abs().argmin()]

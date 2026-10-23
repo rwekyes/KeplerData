@@ -62,6 +62,33 @@ before class.
 - **Non-transiting planets:** the archive lists Kepler-10 d (151 d), which
   doesn't transit and so won't appear in the light curve. Filter on `tran_flag`
   when folding on known periods.
+- **Test deploy (M0):** Community Cloud runs Python 3.14 and searches MAST in 15.7 s.
+
+### Findings from M1
+
+- **Kepler-10 b recovered:** period 0.8375 d (exact match), radius 1.44 R⊕ vs.
+  1.47 R⊕ in the archive (−2%). The box depth reads about 20% below the
+  archive's, because a box-shaped fit averages over the dip's curved bottom
+  while the archive reports the deepest point. Radius is what we compare.
+- **Alias lookup:** unknown names make the archive's alias service stall for
+  about 120 s, so `find_star` calls it directly with a 10 s timeout. The
+  service also returns two-star systems (Kepler-16) under system-level
+  aliases, so we gather aliases from every star in the system to find the KIC
+  ID. Bare KIC numbers work even for stars the planet archive doesn't know.
+- **Period search speed:** a naive grid over 0.5–20 d took about 60 s. Three
+  fixes brought it to about 9 s locally:
+  1. a period grid that thins out at long periods, where dips last longer
+  2. searching hourly averages, then refining on the full data
+  3. numpy binning, because lightkurve's `bin()` took 6.6 s on its own
+- **We call astropy `BoxLeastSquares` directly** instead of
+  `lc.to_periodogram("bls")`. Lightkurve's wrapper runs a size check based on
+  its default grid even when you pass your own, so it raises spurious errors
+  on wide searches.
+- **Display names:** the archive uses the KOI-351 names for most Kepler-90
+  planets ("KOI-351 b"). Relabel them to Kepler-90 names in the UI.
+- **Still to watch:** about 9 s per search is OK behind a spinner with caching,
+  but cloud CPUs may be slower. Time it on Community Cloud in M2, and consider
+  narrower default ranges per target.
 
 ## Where it runs
 
@@ -140,12 +167,13 @@ KeplerData/
 ├── PLAN.md
 ├── requirements.txt         # pinned, for Community Cloud
 ├── app.py                   # Streamlit entry point: layout, sidebar, step flow
-├── src/kepler/
+├── kepler/                  # at the root (not src/) so Streamlit imports it without path hacks
 │   ├── targets.py           # featured targets: names, blurbs, steps to run
 │   ├── fetch.py             # MAST download, archive query, cache fallback
 │   ├── process.py           # clean, stitch, flatten, period search, fold, multi-planet loop
 │   └── plots.py             # Plotly figures with shared projector-friendly styling
 ├── scripts/
+│   ├── check_target.py      # run the pipeline on one star, time each step, compare to archive
 │   └── precache.py          # build the bundled fallback data for featured targets
 ├── data/
 │   ├── raw/                 # lightkurve download cache (gitignored)
@@ -160,8 +188,8 @@ The "Show the code" panels use `inspect.getsource()` on the functions in
 
 - [x] Install the stack into `.venv` on Python 3.14 and pin it in `requirements.txt`
 - [x] `.gitignore`: `.venv/`, `data/raw/`, `__pycache__/`, `.idea/`
-- [ ] `streamlit hello` runs in the browser
-- [ ] Test deploy of a one-line app to Community Cloud on Python 3.14
+- [x] `streamlit hello` runs in the browser
+- [x] Test deploy of a one-line app to Community Cloud on Python 3.14
 
 ## Phase 1 — Data layer (`fetch.py`)
 
@@ -211,8 +239,8 @@ The "Show the code" panels use `inspect.getsource()` on the functions in
 
 ## Milestones
 
-- [ ] **M0** Environment installs ✅; `streamlit hello` works locally; hello-world app deploys to Community Cloud
-- [ ] **M1** Kepler-10 end to end in plain functions: download, clean, find the planet, fold
+- [x] **M0** Environment installs; `streamlit hello` works locally; hello-world app deploys to Community Cloud
+- [x] **M1** Kepler-10 end to end in plain functions: download, clean, find the planet, fold
 - [ ] **M2** Streamlit app with the step flow, explanations, "Show the code," and Plotly plots, for Kepler-10
 - [ ] **M3** Search box with friendly errors; sidebar settings wired up
 - [ ] **M4** All featured targets, including per-target behavior for Kepler-16 and Boyajian's Star

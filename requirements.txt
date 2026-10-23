@@ -4,4 +4,5 @@ lightkurve==2.6.0
 numpy==2.5.4
 pandas==2.3.3
 plotly==7.1.0
+requests==2.34.2
 streamlit==1.66.1

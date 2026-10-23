@@ -1,4 +1,4 @@
-# Temporary test app: confirms the cloud host has the right Python and
+3# Temporary test app: confirms the cloud host has the right Python and
 # libraries, and can reach the Kepler archive. Replaced by the real app in M2.
 import sys
 import time

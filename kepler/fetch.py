@@ -2,6 +2,7 @@
 astronomers already know about its planets."""
 import difflib
 import re
+import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -150,7 +151,14 @@ def download_light_curves(star):
                 f"{star.name} is in Kepler's catalog, but Kepler never recorded its brightness. "
                 f"The catalog lists millions of stars; Kepler only measured about 200,000 of them."
             )
-        return results.download_all(download_dir=str(RAW_DATA_DIR))
+        try:
+            return results.download_all(download_dir=str(RAW_DATA_DIR))
+        except LightkurveError:
+            # A half-finished download (say, two people fetching the same star at
+            # once) leaves a broken file behind. Delete this star's files and retry.
+            for folder in (RAW_DATA_DIR / "mastDownload" / "Kepler").glob(f"kplr{star.kic:09d}_*"):
+                shutil.rmtree(folder, ignore_errors=True)
+            return results.download_all(download_dir=str(RAW_DATA_DIR))
 
 
 def known_planets(star):
@@ -162,11 +170,12 @@ def known_planets(star):
         table = NasaExoplanetArchive.query_criteria(
             table="pscomppars",
             where=f"hostname in ({names})",
-            select="pl_name, pl_orbper, pl_tranmid, pl_trandur, pl_trandep, pl_rade, st_rad, tran_flag",
+            select="pl_name, pl_orbper, pl_orbsmax, pl_tranmid, pl_trandur, pl_trandep, pl_rade, st_rad, tran_flag",
         )
     planets = table.to_pandas().rename(columns={
         "pl_name": "name",
         "pl_orbper": "period_days",
+        "pl_orbsmax": "distance_au",
         "pl_tranmid": "transit_time",
         "pl_trandur": "duration_hours",
         "pl_trandep": "depth_percent",
@@ -194,5 +203,5 @@ def star_radius(planets, quarters):
 
 
 def _empty_planet_table():
-    return pd.DataFrame(columns=["name", "period_days", "transit_time", "duration_hours",
+    return pd.DataFrame(columns=["name", "period_days", "distance_au", "transit_time", "duration_hours",
                                  "depth_percent", "radius_earths", "star_radius_suns", "transits"])

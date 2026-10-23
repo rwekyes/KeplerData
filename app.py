@@ -4,6 +4,7 @@ Run with:  streamlit run app.py
 """
 import inspect
 import warnings
+from dataclasses import astuple
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -43,6 +44,13 @@ def load_star(name):
 def search(_flat, kic, window_days, min_period, max_period):
     """The slow step, cached by star and settings (the leading _ skips hashing the light curve)."""
     return process.search_for_planet(_flat, min_period, max_period)
+
+
+@st.cache_data(show_spinner=False, max_entries=200)
+def next_planet(_light_curve, kic, window_days, min_period, max_period, found):
+    """One more round of "hide what we found, search again", cached so a second visit is instant."""
+    return process.search_without(_light_curve, [process.Signal(*s) for s in found],
+                                  window_days, min_period, max_period)
 
 
 # ── Switching stars ──────────────────────────────────────────────────────────
@@ -86,12 +94,19 @@ def show_code(*functions):
             st.code(inspect.getsource(function))
 
 
-def plot(figure):
-    st.plotly_chart(figure, theme=None, config={"displaylogo": False})
+def plot(figure, toolbar=True):
+    st.plotly_chart(figure, theme=None, config={"displaylogo": False, "displayModeBar": toolbar})
 
 
 def days(value):
     return f"{value:g} day" + ("" if value == 1 else "s")
+
+
+def echo_description(echo):
+    """("Kepler-18 c", 2) → "half of Kepler-18 c's orbit"."""
+    planet, ratio = echo
+    words = {2: "half", 3: "a third", 1 / 2: "twice", 1 / 3: "three times"}[ratio]
+    return f"{words} {'of ' if ratio > 1 else ''}{planet['name']}'s orbit"
 
 
 def calendar_date(kepler_days):
@@ -104,6 +119,7 @@ st.session_state.setdefault("featured", targets.FEATURED[0].name)
 st.session_state.setdefault("star_name", "")
 name = st.session_state.star_name.strip() or st.session_state.featured
 target = targets.find(name)
+story = target.story if target else targets.PLANET
 with st.sidebar:
     st.header("Pick a star")
     st.radio(
@@ -127,6 +143,11 @@ with st.sidebar:
         value=target.periods if target else targets.STANDARD_PERIODS,
         help="The shortest and longest orbits to try. A wider range can find more, but takes longer.",
     )
+    planets_to_find = st.slider(
+        "Planets to find", 1, 8, key=f"planets {name}",
+        value=target.planets_to_find if target else targets.STANDARD_PLANETS_TO_FIND,
+        help="How many times step ⑦ hides the dips it found and searches again.",
+    ) if story == targets.PLANET else 1
 
 st.title("Finding a planet in Kepler data")
 st.markdown(
@@ -142,7 +163,6 @@ if not name:
 if min_period >= max_period:
     st.error("Pick a range of orbits to search: the two ends of the slider are on the same value.")
     st.stop()
-story = target.story if target else targets.PLANET
 
 with st.spinner(f"Looking up {name} and downloading its Kepler data (the first time can take a minute)…"):
     try:
@@ -154,7 +174,8 @@ if isinstance(loaded, Exception):
 star, planets, quarters = loaded
 known = planets[planets["transits"]]
 
-st.subheader(target.name if target else star.name)
+display_name = target.name if target else star.name
+st.subheader(display_name)
 if target:
     st.markdown(target.blurb)
 
@@ -319,6 +340,7 @@ if story == targets.ECLIPSES:
 # ── ⑤ Fold ───────────────────────────────────────────────────────────────────
 st.header("⑤ Fold: stack every orbit", divider="gray")
 flat, signal = process.search_again_with_dips_protected(light_curve, first_guess, window_days)
+our_signal = signal
 match = process.matching_known_planet(planets, signal)
 others = [p for p in known["name"] if match is None or p != match["name"]]
 fold_on = OUR_SIGNAL
@@ -401,11 +423,22 @@ if match is not None:
         )
 elif len(known):
     which = "the planet" if len(known) == 1 else f"any of the {len(known)} planets"
-    st.markdown(
-        f"Our strongest signal doesn't match {which} NASA's Exoplanet Archive lists "
-        f"for this star. It could be noise, an echo of a real planet, or something "
-        f"happening on the star itself. NASA's list:"
-    )
+    echo = process.echoed_known_planet(planets, signal)
+    if echo:
+        planet, ratio = echo
+        st.markdown(
+            f"Our strongest signal's orbit is **{echo_description(echo)}**: it's an echo. "
+            f"The search lined that planet's real dips up at the wrong orbit"
+            + (", and stacking the empty stretches between them makes its dip look shallower"
+               if ratio > 1 else "")
+            + f". Try folding on {planet['name']} in step ⑤. NASA's list:"
+        )
+    else:
+        st.markdown(
+            f"Our strongest signal doesn't match {which} NASA's Exoplanet Archive lists "
+            f"for this star. It could be noise, an echo of a real planet, or something "
+            f"happening on the star itself. NASA's list:"
+        )
     in_range = known["period_days"].between(min_period, max_period)
     st.dataframe(
         {
@@ -431,3 +464,96 @@ else:
         "checks before calling a signal a planet."
     )
 show_code(process.planet_radius, process.matching_known_planet, fetch.known_planets)
+
+# ── ⑦ Look for more planets ──────────────────────────────────────────────────
+st.header("⑦ Look for more planets", divider="gray")
+st.markdown(
+    f"A search only finds the strongest signal. To look for more planets, we hide the "
+    f"dips of every planet found so far, search again, and repeat. Each round tries every "
+    f"orbit from {days(min_period)} to {days(max_period)}, so this takes a while. Set how "
+    f"many rounds with **Planets to find** in the sidebar."
+)
+settings = (star.kic, window_days, min_period, max_period, planets_to_find)
+if st.button(f"Search for up to {planets_to_find} planets", type="primary"):
+    st.session_state[f"ran {settings}"] = True
+if st.session_state.get(f"ran {settings}"):
+    found = [our_signal]
+    with st.status("Searching…", expanded=True) as status:
+        st.write(f"Round 1: {days(round(our_signal.period, 3))} (from step ⑤)")
+        for number in range(2, planets_to_find + 1):
+            status.update(label=f"Round {number} of {planets_to_find}: hiding what we've found and searching again…")
+            found.append(next_planet(light_curve, star.kic, window_days, min_period, max_period,
+                                     tuple(astuple(s) for s in found)))
+            st.write(f"Round {number}: {days(round(found[-1].period, 3))}")
+        status.update(label=f"Searched {planets_to_find} times", state="complete", expanded=False)
+
+    matched, matches = [], []
+    for s in found:
+        planet = process.matching_known_planet(planets, s)
+        echo = process.echoed_known_planet(planets, s) if planet is None else None
+        matched += [planet["name"]] if planet is not None else []
+        matches.append(planet["name"] if planet is not None else f"echo: {echo_description(echo)}" if echo else "—")
+    st.dataframe(
+        {
+            "Round": range(1, len(found) + 1),
+            "Orbit (days)": [s.period for s in found],
+            "Dip depth (ppm)": [s.depth * 1e6 for s in found],
+            "Size (× Earth)": [process.planet_radius(s, star_size) if star_size and s.depth > 0 else None
+                               for s in found],
+            "Matches NASA's": matches,
+        },
+        hide_index=True,
+        column_config={
+            "Orbit (days)": st.column_config.NumberColumn(format="%.3f"),
+            "Dip depth (ppm)": st.column_config.NumberColumn(format="%.0f"),
+            "Size (× Earth)": st.column_config.NumberColumn(format="%.2f"),
+        },
+    )
+    missed = known[~known["name"].isin(matched)]
+    if len(known) and missed.empty:
+        st.success(f"Found all {len(known)} of the planets NASA lists for this star.")
+    elif len(known):
+        st.markdown(
+            f"We found **{len(set(matched))} of the {len(known)}** planets NASA lists. Missed: "
+            + ", ".join(f"{p['name']} ({p['period_days']:.2f}-day orbit, {p['radius_earths']:.2f}× Earth"
+                        + ("" if min_period <= p["period_days"] <= max_period else ", outside your search range")
+                        + ")" for _, p in missed.iterrows()) + "."
+        )
+        for planet_name in missed["name"]:
+            if target and planet_name in target.missed_notes:
+                st.info(target.missed_notes[planet_name])
+    if "—" in matches:
+        st.caption("Rounds that match nothing may be noise, or leftovers of a big planet's dips "
+                   "that weren't completely hidden.")
+show_code(process.search_without, process.echoed_known_planet)
+
+# ── ⑧ Every known planet, and how the system compares with ours ─────────────
+if len(known) >= 2:
+    st.header("⑧ Every planet NASA lists here", divider="gray")
+    st.markdown(
+        "Folding on each of NASA's published orbits shows every planet's dip, measured "
+        "in our data, including any our search missed:"
+    )
+    rows = list(known.iterrows())
+    for pair in (rows[i:i + 2] for i in range(0, len(rows), 2)):
+        for column, (_, planet) in zip(st.columns(2), pair):
+            with column:
+                flat_known, measured = process.measure_known_planet(light_curve, planet, window_days)
+                size = process.planet_radius(measured, star_size) if star_size and measured.depth > 0 else None
+                st.markdown(
+                    f"**{planet['name']}**: {planet['period_days']:.2f}-day orbit. "
+                    + (f"We measure {size:.2f}× Earth" if size else "Too faint to measure")
+                    + f" (NASA: {planet['radius_earths']:.2f}×)."
+                )
+                plot(plots.folded(process.fold(flat_known, measured), measured, compact=True), toolbar=False)
+    show_code(process.measure_known_planet)
+
+    st.markdown("**Compared with our Solar System**")
+    plot(plots.compared_with_solar_system(known, display_name))
+    farthest = known["distance_au"].max()
+    beyond = [planet for planet, _, distance in plots.SOLAR_SYSTEM if distance > farthest]
+    st.caption(
+        "Each dot is sized to scale with the others (the smallest are enlarged a little so "
+        "they stay visible), at its distance from its star."
+        + (f" The whole {display_name} system would fit inside {beyond[0]}'s orbit." if beyond else "")
+    )

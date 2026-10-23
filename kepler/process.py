@@ -43,6 +43,15 @@ def remove_outliers(light_curve, sigma=4):
     return light_curve.remove_outliers(sigma_upper=sigma, sigma_lower=np.inf)
 
 
+LONG_ORBIT = 20  # days; longer orbits have longer dips, so we can search them more coarsely
+
+
+@dataclass
+class Periodogram:
+    period: np.ndarray  # every orbit we tried, in days
+    power: np.ndarray   # how well a box-shaped dip fits at each one
+
+
 def search_for_planet(light_curve, min_period=0.5, max_period=20):
     """Box Least Squares: try many possible orbits and find the one that lines up the most dips.
 
@@ -52,34 +61,41 @@ def search_for_planet(light_curve, min_period=0.5, max_period=20):
     time = light_curve.time.value
     flux = plain_numbers(light_curve.flux)
     flux_err = plain_numbers(light_curve.flux_err)
+    periods = _period_grid(time, min_period, max_period)
 
-    # Quick search on hourly averages, which is twice as fast...
-    hourly = _hourly_averages(time, flux, flux_err)
-    search = _box_least_squares(*hourly, _period_grid(time, min_period, max_period))
+    # Quick search on averages, which is much faster: hourly averages for
+    # short orbits, 3-hour averages for long orbits (whose dips last longer)...
+    short, long = periods[periods < LONG_ORBIT], periods[periods >= LONG_ORBIT]
+    parts = []
+    if len(short):
+        parts.append(_box_least_squares(*_averages(time, flux, flux_err, hours=1), short, max_dip_hours=10))
+    if len(long):
+        parts.append(_box_least_squares(*_averages(time, flux, flux_err, hours=3), long, max_dip_hours=15))
+    search = Periodogram(np.concatenate([p.period for p in parts]), np.concatenate([p.power for p in parts]))
     rough_period = search.period[np.argmax(search.power)]
 
     # ...then a fine search near the best period using every measurement,
     # because averaging blurs the dip and makes it look shallower.
     nearby = np.linspace(rough_period * 0.999, rough_period * 1.001, 200)
-    return search, _strongest_signal(_box_least_squares(time, flux, flux_err, nearby))
+    return search, _strongest_signal(_box_least_squares(time, flux, flux_err, nearby, max_dip_hours=15))
 
 
-def _hourly_averages(time, flux, flux_err):
-    """Average the measurements in each hour (Kepler took about two per hour)."""
-    hour = np.floor((time - time.min()) * 24).astype(int)
-    count = np.bincount(hour)
+def _averages(time, flux, flux_err, hours):
+    """Average the measurements in each stretch of this many hours (Kepler took about two per hour)."""
+    stretch = np.floor((time - time.min()) * 24 / hours).astype(int)
+    count = np.bincount(stretch)
     has_data = count > 0
     count = count[has_data]
     return (
-        np.bincount(hour, time)[has_data] / count,
-        np.bincount(hour, flux)[has_data] / count,
-        np.sqrt(np.bincount(hour, flux_err**2)[has_data]) / count,
+        np.bincount(stretch, time)[has_data] / count,
+        np.bincount(stretch, flux)[has_data] / count,
+        np.sqrt(np.bincount(stretch, flux_err**2)[has_data]) / count,
     )
 
 
-def _box_least_squares(time, flux, flux_err, periods):
+def _box_least_squares(time, flux, flux_err, periods, max_dip_hours):
     """Slide a box-shaped dip across the data at each period and score how well it fits."""
-    durations = np.geomspace(1, 10, 8) / 24  # try dips lasting 1 to 10 hours
+    durations = np.geomspace(1, max_dip_hours, 8) / 24  # try dips lasting 1 hour up to the maximum
     durations = durations[durations < periods.min() / 2]
     return BoxLeastSquares(time, flux, flux_err).power(periods, durations)
 
@@ -128,7 +144,7 @@ def fold(light_curve, signal):
 def transit_mask(light_curve, signal):
     """Mark which measurements fall during this planet's dips (with some margin)."""
     return light_curve.create_transit_mask(
-        period=signal.period, transit_time=signal.transit_time, duration=2 * signal.duration
+        period=signal.period, transit_time=signal.transit_time, duration=3 * signal.duration
     )
 
 
@@ -158,6 +174,18 @@ def measure_known_planet(light_curve, planet, window_days=1.0):
                                       duration=duration / 2)
     signal.depth = float(flux[~transit_mask(flat, signal)].mean() - flux[middle].mean())
     return flat, signal
+
+
+def search_without(light_curve, found, window_days=1.0, min_period=0.5, max_period=20):
+    """Hide the dips of every planet found so far, then search what's left for the next one."""
+    hide = np.zeros(len(light_curve), dtype=bool)
+    for signal in found:
+        hide |= transit_mask(light_curve, signal)
+    flat = remove_outliers(flatten(light_curve, window_days, transit_mask=hide))
+    for signal in found:
+        flat = flat[~transit_mask(flat, signal)]
+    _, signal = search_for_planet(flat, min_period, max_period)
+    return signal
 
 
 def find_second_eclipse(light_curve, signal):
@@ -194,3 +222,16 @@ def matching_known_planet(planets, signal, tolerance=0.01):
     if transiting.empty or mismatch.min() > tolerance:
         return None
     return transiting.loc[mismatch.idxmin()]
+
+
+def echoed_known_planet(planets, signal, tolerance=0.01):
+    """A known planet whose orbit is 2× or 3× ours, or ½ or ⅓ of it: our signal is its echo.
+
+    Returns the planet and how many of our orbits fit in one of its (None if there's no echo).
+    """
+    transiting = planets[planets["transits"]].dropna(subset=["period_days"])
+    for ratio in (2, 3, 1 / 2, 1 / 3):
+        mismatch = (transiting["period_days"] / signal.period - ratio).abs() / ratio
+        if len(transiting) and mismatch.min() <= tolerance:
+            return transiting.loc[mismatch.idxmin()], ratio
+    return None

@@ -73,8 +73,11 @@ def period_search(search):
     return _style(fig, "Orbit tried (days)", "Signal strength")
 
 
-def folded(folded_lc, signal):
-    """All orbits stacked: single measurements, their averages, and the best-fit box."""
+def folded(folded_lc, signal, compact=False):
+    """All orbits stacked: single measurements, their averages, and the best-fit box.
+
+    compact makes a smaller version, without a legend, for a grid of several.
+    """
     hours = folded_lc.time.value * 24
     ppm = _ppm(folded_lc.flux)
     duration = signal.duration * 24
@@ -110,6 +113,9 @@ def folded(folded_lc, signal):
     low, high = np.percentile(ppm, [1, 99])
     fig.update_yaxes(range=[min(low, level + 1.5 * (bottom - level)), high])
     fig.update_xaxes(range=[-window, window])
+    if compact:
+        fig.update_layout(showlegend=False)
+        return _style(fig, "Hours from mid-dip", "ppm", height=300)
     return _style(fig, "Hours from the middle of the dip", "Brightness change (ppm)")
 
 
@@ -152,10 +158,47 @@ def dips(lc, found):
     return _style(fig, None, "Brightness change (%)")
 
 
-def _style(fig, x_title, y_title):
+# Our Solar System, for scale: (name, size in Earths, distance from the Sun in AU).
+SOLAR_SYSTEM = [
+    ("Mercury", 0.383, 0.387), ("Venus", 0.949, 0.723), ("Earth", 1.0, 1.0), ("Mars", 0.532, 1.524),
+    ("Jupiter", 11.21, 5.203), ("Saturn", 9.45, 9.537), ("Uranus", 4.01, 19.19), ("Neptune", 3.88, 30.07),
+]
+LABELED = {"Earth", "Jupiter", "Neptune"}
+
+
+def compared_with_solar_system(planets, star_name):
+    """Each planet as a dot sized to scale, placed at its distance from its star, above our Solar System."""
+    pixels_per_earth = 5  # dot diameter; the smallest planets get at least 7 pixels so they stay visible
+    rows = [
+        (star_name, BLUE, [(name.removeprefix(star_name).strip(), size, distance)
+                           for name, size, distance in zip(planets["name"], planets["radius_earths"], planets["distance_au"])
+                           if size > 0 and distance > 0]),
+        ("Solar System", ORANGE, SOLAR_SYSTEM),
+    ]
+    fig = go.Figure()
+    for row, color, members in rows:
+        names, sizes, distances = zip(*members) if members else ((), (), ())
+        fig.add_trace(go.Scatter(
+            x=distances, y=[row] * len(members), name=row, mode="markers+text",
+            marker=dict(size=[max(7, pixels_per_earth * s) for s in sizes], color=color, line=dict(width=0)),
+            text=[n if row == star_name or n in LABELED else "" for n in names],
+            textposition="top center", textfont=dict(color=INK, size=14),
+            customdata=list(zip(names, sizes)),
+            hovertemplate="%{customdata[0]}<br>%{customdata[1]:.2f}× Earth's size<br>%{x:.3f} AU<extra></extra>",
+        ))
+    fig.add_vline(x=1, line=dict(color=MUTED_INK, width=1))
+    fig.add_annotation(x=0, y=1, xref="x", yref="paper", text="Earth's distance from the Sun", showarrow=False,
+                       xanchor="left", xshift=4, yanchor="top", font=dict(color=MUTED_INK, size=14))
+    fig.update_layout(showlegend=False)
+    fig.update_xaxes(type="log", range=[np.log10(0.03), np.log10(45)], tickvals=[0.03, 0.1, 0.3, 1, 3, 10, 30])
+    fig.update_yaxes(range=[-0.6, 1.8])
+    return _style(fig, "Distance from the star (AU: 1 = Earth to the Sun)", None, height=360)
+
+
+def _style(fig, x_title, y_title, height=430):
     """Big text, light gridlines, and nothing that needs a wide screen."""
     fig.update_layout(
-        height=430,
+        height=height,
         font=dict(size=18, color=INK),
         paper_bgcolor="white",
         plot_bgcolor="white",

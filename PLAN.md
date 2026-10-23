@@ -206,6 +206,46 @@ before class.
 - **Blurbs in `kepler/targets.py` are from memory, like the table below.**
   Verify them before quoting them in the report.
 
+### Findings from M5
+
+- **Search, hide, repeat works.** Kepler-90, 8 rounds over 0.5–400 d, finds
+  **7 of 8**: h, g, d, c, b, e, f. Round 3 is a leftover (339.4 d, likely the
+  edges of h's or g's dips). The only planet missed is **Kepler-90 i**
+  (65 ppm), the one the 2017 neural network found, so the talk's point falls
+  out of the data. Kepler-18 (0.5–20 d) finds d, c, and b, all exact.
+- **Echoes are now recognized.** Kepler-18 at 0.3–5 d finds 3.8208 d, exactly
+  half of c's 7.6416 d orbit; searching again finds 4.953 d, a third of d's
+  14.859 d. The dip looks shallower because each stacked dip is diluted by an
+  empty orbit. `echoed_known_planet` checks for 2×, 3×, ½, and ⅓ (within 1%).
+- **Search changes (all in `search_for_planet`):**
+  - Orbits of 20 d or more are searched on 3-hour averages with dips up to
+    15 h. Kepler-90 h's dip lasts 14.4 h, and the old 10 h maximum left
+    leftovers behind.
+  - The protected stretch around each dip widened from 2× to 3× the dip length.
+  - The 8-round Kepler-90 search took 157 s with only these dip changes and
+    124 s with the 3-hour averages too.
+  - Side effects: Kepler-10 b now measures 1.53× Earth (+4%, was −2%) with a
+    1.5 h box; Kepler-16's deep eclipse reads 10.3% (was 11.5%). Kepler-22 is
+    still fooled (336 d).
+- **Time:** Kepler-90's whole page plus the 8 rounds took about 4 minutes on
+  a fresh server locally. Each round is cached separately, so a second visit
+  is instant. **Run Kepler-90's search once before class** (and check how
+  long it takes on Community Cloud). Rounds start only with the button, so
+  browsing other stars stays quick.
+- **Download race (fixed):** two processes downloading the same star at once
+  left a half-written file, and the app reported it as "Couldn't reach NASA".
+  The broken file would have stayed in `data/raw/` and broken that star for
+  good. Now a failed read deletes that star's files and downloads once more.
+- **Step ⑧ for any star with 2+ known planets:** a fold for each NASA orbit,
+  measured in our data, plus a to-scale picture next to the Solar System.
+  The Kepler-90 g fold shows the V-shaped blur from its dips arriving early
+  and late.
+- **Local server gotcha:** `pkill` sends a polite stop, and Streamlit can take
+  several seconds to exit. A new server started too soon fails with "Port
+  8599 is not available", or worse, the old one keeps serving stale `kepler`
+  modules (the same `AttributeError` as on the cloud). Use `pkill -9`, or
+  wait before restarting.
+
 ## Where it runs
 
 - **In class:** run locally on your laptop (`streamlit run app.py`) and open it
@@ -365,7 +405,7 @@ The "Show the code" panels use `inspect.getsource()` on the functions in
 - [x] **M2** Streamlit app with the step flow, explanations, "Show the code," and Plotly plots, for Kepler-10
 - [x] **M3** Search box with friendly errors; sidebar settings wired up
 - [x] **M4** All featured targets, including per-target behavior for Kepler-16 and Boyajian's Star
-- [ ] **M5** Kepler-90 multi-planet section
+- [x] **M5** Kepler-90 multi-planet section
 - [ ] **M6** Bundled fallback data plus a test run with Wi-Fi off for the featured targets
 - [ ] **M7** Presentation mode; dress rehearsal on the projector, timed to fit 10–20 min
 - [ ] **M8** Deployed to Community Cloud and tested by someone other than you

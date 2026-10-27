@@ -1,31 +1,36 @@
-"""Interactive plots, styled to read well on a projector and on a phone."""
+"""Interactive plots, styled to read well on a projector and on a phone, in the light or dark theme."""
 import numpy as np
 import plotly.graph_objects as go
 
 from kepler.process import plain_numbers
 
-# A colorblind-safe pair for the data, and quiet grays for everything else.
+# A colorblind-safe pair for the data, and see-through grays for everything
+# else. Text and background colors come from Streamlit's chart theme, which
+# recolors every plot the moment someone switches between light and dark.
 BLUE = "#2a78d6"
 ORANGE = "#eb6834"
-INK = "#0b0b0b"
-MUTED_INK = "#52514e"
-GRID = "#e6e5e0"
-FAINT_POINTS = "#c4c3bc"
+GRID = "rgba(128, 128, 128, 0.25)"
+FAINT_POINTS = "rgba(128, 128, 128, 0.4)"
+MUTED = "rgba(128, 128, 128, 0.9)"
 
-# Kepler's clock starts at noon on 1 Jan 2009; Plotly's date axes count
-# milliseconds since 1970.
-KEPLER_START_MS = float(np.datetime64("2009-01-01T12:00", "ms").astype("int64"))
+# Plotly's date axes count milliseconds since 1970. Each telescope's clock
+# counts days from its own start: Kepler's ("bkjd") from noon on 1 Jan 2009,
+# TESS's ("btjd") from noon on 8 Dec 2014.
+CLOCK_STARTS_MS = {
+    "bkjd": float(np.datetime64("2009-01-01T12:00", "ms").astype("int64")),
+    "btjd": float(np.datetime64("2014-12-08T12:00", "ms").astype("int64")),
+}
 MS_PER_DAY = 86_400_000
 
 
-def raw_quarters(quarters):
-    """Each quarter as Kepler recorded it, in alternating colors so the seams show."""
+def raw_segments(segments):
+    """Each quarter (Kepler) or sector (TESS) as recorded, in alternating colors so the seams show."""
     fig = go.Figure()
-    for i, quarter in enumerate(quarters):
+    for i, segment in enumerate(segments):
         fig.add_trace(go.Scattergl(
-            x=_dates(quarter.time.value),
-            y=plain_numbers(quarter.flux),
-            name=f"Quarter {quarter.meta['QUARTER']}",
+            x=_dates(segment.time.value, segment.time.format),
+            y=plain_numbers(segment.flux),
+            name=f"Quarter {segment.meta['QUARTER']}" if "QUARTER" in segment.meta else f"Sector {segment.meta['SECTOR']}",
             mode="markers",
             marker=dict(size=2, color=(BLUE, ORANGE)[i % 2]),
             hovertemplate="%{x|%b %d, %Y}<br>%{y:,.0f} electrons/s<extra>%{fullData.name}</extra>",
@@ -38,7 +43,7 @@ def raw_quarters(quarters):
 def light_curve(lc):
     """A whole light curve, in parts per million above or below normal brightness."""
     fig = go.Figure(go.Scattergl(
-        x=_dates(lc.time.value),
+        x=_dates(lc.time.value, lc.time.format),
         y=_ppm(lc.flux),
         mode="markers",
         marker=dict(size=2, color=BLUE),
@@ -66,7 +71,7 @@ def period_search(search):
     ])
     fig.add_annotation(
         x=np.log10(best_period), y=best_power, text=f"<b>{best_period:.3f} days</b>",
-        showarrow=False, xanchor="left", xshift=12, font=dict(color=INK),
+        showarrow=False, xanchor="left", xshift=12,
     )
     fig.update_layout(showlegend=False)
     fig.update_xaxes(type="log", tickvals=[0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500])
@@ -146,13 +151,14 @@ def eclipse(folded_lc, signal):
 def dips(lc, found):
     """The whole light curve in percent, with each big dip lettered."""
     fig = go.Figure(go.Scattergl(
-        x=_dates(lc.time.value), y=_percent(lc.flux), mode="markers",
+        x=_dates(lc.time.value, lc.time.format), y=_percent(lc.flux), mode="markers",
         marker=dict(size=2, color=BLUE),
         hovertemplate="%{x|%b %d, %Y}<br>%{y:+.1f}%<extra></extra>",
     ))
     for letter, dip in zip("ABCDEFGHIJ", found):
-        fig.add_annotation(x=_dates(dip["deepest_time"]), y=-dip["depth"] * 100, text=f"<b>{letter}</b>",
-                           showarrow=True, arrowcolor=MUTED_INK, ax=0, ay=28, font=dict(color=INK, size=20))
+        fig.add_annotation(x=_dates(dip["deepest_time"], lc.time.format), y=-dip["depth"] * 100,
+                           text=f"<b>{letter}</b>", showarrow=True, arrowcolor=MUTED, ax=0, ay=28,
+                           font=dict(size=20))
     fig.update_xaxes(type="date")
     fig.update_yaxes(range=[-100 * max(d["depth"] for d in found) - 6, 3] if found else None)
     return _style(fig, None, "Brightness change (%)")
@@ -180,15 +186,16 @@ def compared_with_solar_system(planets, star_name):
         names, sizes, distances = zip(*members) if members else ((), (), ())
         fig.add_trace(go.Scatter(
             x=distances, y=[row] * len(members), name=row, mode="markers+text",
-            marker=dict(size=[max(7, pixels_per_earth * s) for s in sizes], color=color, line=dict(width=0)),
+            marker=dict(size=[max(7, pixels_per_earth * s) for s in sizes], color=color, line=dict(width=0),
+                        opacity=1),  # Plotly fades dots of different sizes unless told not to
             text=[n if row == star_name or n in LABELED else "" for n in names],
-            textposition="top center", textfont=dict(color=INK, size=14),
+            textposition="top center", textfont=dict(size=14),
             customdata=list(zip(names, sizes)),
             hovertemplate="%{customdata[0]}<br>%{customdata[1]:.2f}× Earth's size<br>%{x:.3f} AU<extra></extra>",
         ))
-    fig.add_vline(x=1, line=dict(color=MUTED_INK, width=1))
+    fig.add_vline(x=1, line=dict(color=MUTED, width=1))
     fig.add_annotation(x=0, y=1, xref="x", yref="paper", text="Earth's distance from the Sun", showarrow=False,
-                       xanchor="left", xshift=4, yanchor="top", font=dict(color=MUTED_INK, size=14))
+                       xanchor="left", xshift=4, yanchor="top", font=dict(size=14))
     fig.update_layout(showlegend=False)
     fig.update_xaxes(type="log", range=[np.log10(0.03), np.log10(45)], tickvals=[0.03, 0.1, 0.3, 1, 3, 10, 30])
     fig.update_yaxes(range=[-0.6, 1.8])
@@ -199,22 +206,23 @@ def _style(fig, x_title, y_title, height=430):
     """Big text, light gridlines, and nothing that needs a wide screen."""
     fig.update_layout(
         height=height,
-        font=dict(size=18, color=INK),
-        paper_bgcolor="white",
-        plot_bgcolor="white",
+        font=dict(size=18),
+        plot_bgcolor="rgba(0, 0, 0, 0)",  # see-through, so the page's own background shows
         margin=dict(l=10, r=10, t=10, b=10),  # axes grow it as their labels need
-        legend=dict(orientation="h", x=0, y=1.02, yanchor="bottom"),
+        legend=dict(orientation="h", x=0, y=1.02, yanchor="bottom", font_size=18),
         hoverlabel=dict(font_size=16),
     )
-    axes = dict(automargin=True, gridcolor=GRID, linecolor=GRID, zeroline=False, title_font_color=MUTED_INK,
-                tickfont_color=MUTED_INK)
+    # Streamlit's chart theme makes axis text small, so we size it ourselves.
+    axes = dict(automargin=True, gridcolor=GRID, linecolor=GRID, zeroline=False, tickfont_size=18,
+                title_font_size=18)
     fig.update_xaxes(title=x_title, **axes)
     fig.update_yaxes(title=y_title, **axes)
     return fig
 
 
-def _dates(kepler_days):
-    return KEPLER_START_MS + kepler_days * MS_PER_DAY
+def _dates(days, clock):
+    """Days on a telescope's clock ("bkjd" or "btjd") → milliseconds since 1970, for Plotly's date axes."""
+    return CLOCK_STARTS_MS[clock] + days * MS_PER_DAY
 
 
 def _ppm(flux):

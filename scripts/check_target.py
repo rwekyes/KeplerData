@@ -28,13 +28,13 @@ def main():
 
     print(f"{args.name}")
     star = step("find star", fetch.find_star, args.name)
-    print(f"    KIC {star.kic}; also known as {', '.join(star.aliases[:4])}")
+    print(f"    {star.mission} data, {star.catalog_name}; also known as {', '.join(star.aliases[:4])}")
     planets = step("known planets", fetch.known_planets, star)
-    quarters = step("download light curves", fetch.download_light_curves, star)
-    light_curve = step("clean", process.clean, quarters)
+    segments = step("download light curves", fetch.download_light_curves, star)
+    light_curve = step("clean", process.clean, segments)
     flat = step("flatten", process.flatten, light_curve, args.window_days)
     flat = step("remove outliers", process.remove_outliers, flat)
-    print(f"    {len(quarters)} quarters, {len(flat):,} measurements")
+    print(f"    {len(segments)} {'quarters' if star.mission == 'Kepler' else 'sectors'}, {len(flat):,} measurements")
     _, signal = step("search for planet", process.search_for_planet, flat, args.min_period, args.max_period)
 
     _, signal = step("search again, masked", process.search_again_with_dips_protected,

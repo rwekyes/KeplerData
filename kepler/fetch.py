@@ -1,5 +1,5 @@
-"""Getting the data: find a star, download what Kepler saw, and look up what
-astronomers already know about its planets."""
+"""Getting the data: find a star, download what Kepler or TESS saw, and look up
+what astronomers already know about its planets."""
 import difflib
 import re
 import shutil
@@ -19,17 +19,21 @@ from lightkurve.utils import LightkurveError
 RAW_DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "raw"
 ALIAS_URL = "https://exoplanetarchive.ipac.caltech.edu/cgi-bin/Lookup/nph-aliaslookup.py"
 
-# Kepler counts time in days since 1 Jan 2009 ("BKJD"); the archive uses Julian
-# days. This is the difference between the two.
-BKJD_OFFSET = 2454833
+# Each telescope counts time in days from its own starting point: Kepler from
+# noon on 1 Jan 2009 ("BKJD"), TESS from noon on 8 Dec 2014 ("BTJD"). The
+# archive uses Julian days. These are the differences.
+CLOCK_STARTS = {"Kepler": 2454833, "TESS": 2457000}
+
+# Each telescope's star catalog: the Kepler Input Catalog and the TESS Input Catalog.
+CATALOGS = {"Kepler": "KIC", "TESS": "TIC"}
 
 
 class StarNotFound(Exception):
     """No NASA archive recognizes this name."""
 
 
-class NotObservedByKepler(Exception):
-    """A real star, but Kepler never recorded its brightness."""
+class NotObserved(Exception):
+    """A real star, but neither Kepler nor TESS recorded its brightness."""
 
 
 class ArchiveUnavailable(Exception):
@@ -39,12 +43,23 @@ class ArchiveUnavailable(Exception):
 @dataclass
 class Star:
     name: str            # its usual name, e.g. "Kepler-90"
-    kic: int             # its number in the Kepler Input Catalog
+    mission: str         # whose data we use: "Kepler" or "TESS"
+    number: int          # its number in that telescope's star catalog
     aliases: list[str]   # every other name it goes by, e.g. "KOI-351"
+
+    @property
+    def catalog_name(self):
+        """e.g. "KIC 11904151" or "TIC 150428135"."""
+        return f"{CATALOGS[self.mission]} {self.number}"
 
 
 def find_star(name, timeout=10):
-    """Turn whatever name someone typed into a star in the Kepler Input Catalog (KIC)."""
+    """Turn whatever name someone typed into a star, and pick the telescope whose data we use.
+
+    Kepler watched one patch of sky for four years, so for its stars we use
+    Kepler's data. TESS covers almost the whole sky, a month or more at a time,
+    so every other star gets TESS's data, and so do TESS names (TIC and TOI numbers).
+    """
     name = name.strip()
     if name.isdigit():
         name = f"KIC {name}"  # a bare number is most likely a KIC number
@@ -53,16 +68,26 @@ def find_star(name, timeout=10):
     # stalls on names it doesn't, so we give up on it quickly and ask MAST
     # (which also knows stars without planets).
     aliases = _lookup_aliases(name, timeout)
-    kic = re.fullmatch(r"KIC\s*(\d+)", name, flags=re.IGNORECASE)
-    if kic:
-        return Star(_usual_name(name, aliases), int(kic.group(1)), aliases)
-    if not aliases:
-        aliases = _lookup_with_mast(name)
+    catalog_number = re.fullmatch(r"(KIC|TIC)\s*(\d+)", name, flags=re.IGNORECASE)
+    if catalog_number:  # a catalog number is all we need
+        aliases = list(dict.fromkeys([f"{catalog_number[1].upper()} {int(catalog_number[2])}", *aliases]))
+    elif not (_catalog_number(aliases, "KIC") or _catalog_number(aliases, "TIC")):
+        aliases = list(dict.fromkeys([*aliases, *_lookup_with_mast(name)]))
 
-    kic_names = [a for a in aliases if a.startswith("KIC ")]
-    if kic_names:
-        return Star(_usual_name(name, aliases), int(kic_names[0].removeprefix("KIC ")), aliases)
-    raise NotObservedByKepler(_why_not_kepler(_usual_name(name, aliases), aliases))
+    usual_name = _usual_name(name, aliases)
+    kic, tic = _catalog_number(aliases, "KIC"), _catalog_number(aliases, "TIC")
+    wants_tess = re.match(r"(TIC|TOI)(?![a-z])", name, flags=re.IGNORECASE)
+    if kic and not wants_tess:
+        return Star(usual_name, "Kepler", kic, aliases)
+    if tic:
+        return Star(usual_name, "TESS", tic, aliases)
+    raise NotObserved(f"{usual_name} is a real star, but it isn't in Kepler's or TESS's catalog.")
+
+
+def _catalog_number(aliases, catalog):
+    """The star's number in a catalog ("KIC" or "TIC"), or None."""
+    numbers = [a.removeprefix(f"{catalog} ") for a in aliases if a.startswith(f"{catalog} ")]
+    return int(numbers[0]) if numbers else None
 
 
 def _usual_name(name, aliases):
@@ -80,10 +105,11 @@ def suggest_name(name):
     if not match:
         return None
     word, number = match.groups()
-    close = difflib.get_close_matches(word.lower(), ["kepler", "koi", "kic"], n=1, cutoff=0.6)
+    close = difflib.get_close_matches(word.lower(), ["kepler", "koi", "kic", "toi", "tic"], n=1, cutoff=0.6)
     if not close:
         return None
-    guess = {"kepler": f"Kepler-{number}", "koi": f"KOI-{number}", "kic": f"KIC {number}"}[close[0]]
+    guess = {"kepler": f"Kepler-{number}", "koi": f"KOI-{number}", "kic": f"KIC {number}",
+             "toi": f"TOI-{number}", "tic": f"TIC {number}"}[close[0]]
     return None if guess.lower() == name.strip().lower() else guess
 
 
@@ -124,15 +150,6 @@ def _lookup_with_mast(name):
     return aliases
 
 
-def _why_not_kepler(name, aliases):
-    if any(a.startswith("EPIC ") for a in aliases):
-        return (f"{name} was observed by K2, Kepler's second mission, which pointed at "
-                f"different parts of the sky. This app only handles the original Kepler mission.")
-    return (f"{name} is a real star, but it isn't in Kepler's catalog: Kepler only watched "
-            f"one patch of sky, in the constellations Cygnus and Lyra. NASA's TESS "
-            f"telescope, which scans almost the whole sky, may have observed it instead.")
-
-
 @contextmanager
 def _reaching(archive):
     """Turn any network failure into one friendly error."""
@@ -142,23 +159,58 @@ def _reaching(archive):
         raise ArchiveUnavailable(f"Couldn't reach {archive}.") from error
 
 
+# Where each telescope's downloads land inside RAW_DATA_DIR.
+DOWNLOAD_FOLDERS = {"Kepler": "mastDownload/Kepler/kplr{:09d}_*", "TESS": "mastDownload/*/*{:016d}*"}
+
+
 def download_light_curves(star):
-    """Download every quarter (~3 months each) of brightness measurements Kepler took of this star."""
+    """Download every stretch of brightness measurements the telescope took of this star:
+    Kepler's quarters (~3 months each) or TESS's sectors (~27 days each)."""
     with _reaching("NASA's MAST archive"):
-        results = lk.search_lightcurve(f"KIC {star.kic}", mission="Kepler", exptime="long", author="Kepler")
+        if star.mission == "Kepler":
+            results = lk.search_lightcurve(star.catalog_name, mission="Kepler", exptime="long", author="Kepler")
+        else:
+            results = search_tess(star)
         if len(results) == 0:
-            raise NotObservedByKepler(
-                f"{star.name} is in Kepler's catalog, but Kepler never recorded its brightness. "
-                f"The catalog lists millions of stars; Kepler only measured about 200,000 of them."
-            )
+            raise NotObserved(_why_not_observed(star))
         try:
-            return results.download_all(download_dir=str(RAW_DATA_DIR))
+            light_curves = results.download_all(download_dir=str(RAW_DATA_DIR))
         except LightkurveError:
             # A half-finished download (say, two people fetching the same star at
             # once) leaves a broken file behind. Delete this star's files and retry.
-            for folder in (RAW_DATA_DIR / "mastDownload" / "Kepler").glob(f"kplr{star.kic:09d}_*"):
+            for folder in RAW_DATA_DIR.glob(DOWNLOAD_FOLDERS[star.mission].format(star.number)):
                 shutil.rmtree(folder, ignore_errors=True)
-            return results.download_all(download_dir=str(RAW_DATA_DIR))
+            light_curves = results.download_all(download_dir=str(RAW_DATA_DIR))
+    if star.mission == "TESS":
+        # Averaging TESS's measurements over 10 minutes (30 for full-frame images,
+        # to match the slowest of them) keeps every dip but makes each later
+        # step several times faster.
+        minutes = 10 if results.author[0] == "SPOC" else 30
+        light_curves = lk.LightCurveCollection(
+            [lc.remove_nans().bin(time_bin_size=minutes * u.min) for lc in light_curves])
+    return light_curves
+
+
+def search_tess(star):
+    """TESS's measurements of this star: every 2 minutes if it was picked for a close
+    watch, otherwise every 3–30 minutes, taken from TESS's full-frame images."""
+    results = lk.search_lightcurve(star.catalog_name, mission="TESS")
+    if len(results) == 0:
+        return results
+    close_watch = results[(results.author == "SPOC") & (results.exptime.value == 120)]
+    return close_watch if len(close_watch) else results[results.author == "TESS-SPOC"]
+
+
+def _why_not_observed(star):
+    if star.mission == "Kepler":
+        return (f"{star.name} is in Kepler's catalog, but Kepler never recorded its brightness. "
+                f"The catalog lists millions of stars; Kepler only measured about 200,000 of them.")
+    if any(a.startswith("EPIC ") for a in star.aliases):
+        return (f"{star.name} was observed by K2, Kepler's second mission, but not by TESS. "
+                f"This app handles the original Kepler mission and TESS, but not K2.")
+    return (f"{star.name} is in TESS's catalog, but NASA hasn't made measurements of its "
+            f"brightness from TESS's images. TESS's catalog lists over a billion stars, and "
+            f"NASA processes the brighter ones (and any it was asked to watch closely).")
 
 
 def known_planets(star):
@@ -183,7 +235,7 @@ def known_planets(star):
         "st_rad": "star_radius_suns",
         "tran_flag": "transits",
     })
-    planets["transit_time"] -= BKJD_OFFSET     # switch to Kepler's clock
+    planets["transit_time"] -= CLOCK_STARTS[star.mission]  # switch to the telescope's clock
     planets["name"] = [_rename_planet(name, star) for name in planets["name"]]
     planets["transits"] = planets["transits"] == 1  # some planets never pass in front of their star
     return planets.sort_values("period_days").reset_index(drop=True)
@@ -196,7 +248,7 @@ def _rename_planet(planet, star):
 
 
 def star_radius(planets, quarters):
-    """The star's size in Suns: the planet archive's value if it has one, else Kepler's catalog's."""
+    """The star's size in Suns: the planet archive's value if it has one, else the telescope's catalog's."""
     sizes = planets["star_radius_suns"].dropna()
     size = sizes.iloc[0] if len(sizes) else quarters[0].meta.get("RADIUS")
     return float(size) if size is not None and size == size else None  # NaN != NaN

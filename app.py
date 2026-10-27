@@ -1,4 +1,4 @@
-"""Kepler Planet Finder: follow real NASA Kepler data from download to discovery.
+"""Planet Finder: follow real NASA Kepler and TESS data from download to discovery.
 
 Run with:  streamlit run app.py
 """
@@ -19,11 +19,14 @@ PERIOD_CHOICES = [0.3, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 400.0
 OUR_SIGNAL = "Our strongest signal"
 NAME_HELP = (
     "Names that work: **Kepler** numbers (Kepler-22), **KOI** numbers (KOI-72), "
-    "**KIC** numbers (KIC 11904151, or just 11904151), and well-known star names "
-    "(Boyajian's Star)."
+    "**KIC** numbers (KIC 11904151, or just 11904151), **TOI** numbers (TOI-270), "
+    "**TIC** numbers (TIC 259377017), and well-known star names (Boyajian's Star, "
+    "pi Men). Stars Kepler watched use Kepler's data; any other star, or a TOI or "
+    "TIC name, uses TESS's."
 )
+SEGMENT = {"Kepler": "quarter", "TESS": "sector"}  # what each telescope's archive splits its data into
 
-st.set_page_config(page_title="Kepler Planet Finder", page_icon="🔭", layout="wide")
+st.set_page_config(page_title="Kepler & TESS Planet Finder", page_icon="🔭", layout="wide")
 
 
 @st.cache_data(show_spinner=False, max_entries=10)
@@ -36,18 +39,18 @@ def load_star(name):
     try:
         star = fetch.find_star(name)
         return star, fetch.known_planets(star), fetch.download_light_curves(star)
-    except (fetch.StarNotFound, fetch.NotObservedByKepler) as problem:
+    except (fetch.StarNotFound, fetch.NotObserved) as problem:
         return problem
 
 
 @st.cache_data(show_spinner=False, max_entries=20)
-def search(_flat, kic, window_days, min_period, max_period):
+def search(_flat, star_id, window_days, min_period, max_period):
     """The slow step, cached by star and settings (the leading _ skips hashing the light curve)."""
     return process.search_for_planet(_flat, min_period, max_period)
 
 
 @st.cache_data(show_spinner=False, max_entries=200)
-def next_planet(_light_curve, kic, window_days, min_period, max_period, found):
+def next_planet(_light_curve, star_id, window_days, min_period, max_period, found):
     """One more round of "hide what we found, search again", cached so a second visit is instant."""
     return process.search_without(_light_curve, [process.Signal(*s) for s in found],
                                   window_days, min_period, max_period)
@@ -76,7 +79,7 @@ def explain_and_stop(problem, name):
         if guess:
             st.button(f"Did you mean {guess}?", on_click=search_for, args=(guess,))
         st.markdown(NAME_HELP)
-    elif isinstance(problem, fetch.NotObservedByKepler):
+    elif isinstance(problem, fetch.NotObserved):
         st.warning(str(problem))
         st.markdown(NAME_HELP)
     else:
@@ -95,7 +98,7 @@ def show_code(*functions):
 
 
 def plot(figure, toolbar=True):
-    st.plotly_chart(figure, theme=None, config={"displaylogo": False, "displayModeBar": toolbar})
+    st.plotly_chart(figure, theme="streamlit", config={"displaylogo": False, "displayModeBar": toolbar})
 
 
 def days(value):
@@ -126,9 +129,10 @@ with st.sidebar:
         "Featured stars", [t.name for t in targets.FEATURED], captions=[t.tagline for t in targets.FEATURED],
         key="featured", on_change=pick_featured,
     )
-    st.text_input("…or search any Kepler star", key="star_name", on_change=search_typed_star,
-                  placeholder="e.g. Kepler-11, KOI-72",
-                  help="A Kepler or KOI name, or a number from the Kepler Input Catalog (KIC).")
+    st.text_input("…or search any star", key="star_name", on_change=search_typed_star,
+                  placeholder="e.g. Kepler-11, KOI-72, TOI-270",
+                  help="A Kepler, KOI, or TOI name, a number from the Kepler or TESS Input Catalog "
+                       "(KIC or TIC), or a star's name. TOI and TIC names always use TESS's data.")
 
     # Each star gets its own sliders (note the keys), starting from the settings that suit it.
     st.header("Settings")
@@ -149,12 +153,13 @@ with st.sidebar:
         help="How many times step ⑦ hides the dips it found and searches again.",
     ) if story == targets.PLANET else 1
 
-st.title("Finding a planet in Kepler data")
+st.title("Finding a planet in Kepler and TESS data")
 st.markdown(
     "From 2009 to 2013, NASA's Kepler space telescope stared at one patch of sky "
-    "and measured the brightness of about 150,000 stars every half hour. When a "
-    "planet passes in front of its star, the star dims very slightly. Below, we "
-    "follow one star's measurements from download to discovery."
+    "and measured the brightness of about 150,000 stars every half hour. Its "
+    "successor, TESS, has been scanning almost the whole sky since 2018, a month "
+    "at a time. When a planet passes in front of its star, the star dims very "
+    "slightly. Below, we follow one star's measurements from download to discovery."
 )
 
 if not name:
@@ -164,14 +169,14 @@ if min_period >= max_period:
     st.error("Pick a range of orbits to search: the two ends of the slider are on the same value.")
     st.stop()
 
-with st.spinner(f"Looking up {name} and downloading its Kepler data (the first time can take a minute)…"):
+with st.spinner(f"Looking up {name} and downloading its data (the first time can take a minute or two)…"):
     try:
         loaded = load_star(target.lookup or target.name if target else name)
     except fetch.ArchiveUnavailable as problem:
         loaded = problem
 if isinstance(loaded, Exception):
     explain_and_stop(loaded, name)
-star, planets, quarters = loaded
+star, planets, segments = loaded
 known = planets[planets["transits"]]
 
 display_name = target.name if target else star.name
@@ -180,25 +185,43 @@ if target:
     st.markdown(target.blurb)
 
 # ── ① Download ───────────────────────────────────────────────────────────────
-st.header("① Download what Kepler saw", divider="gray")
-st.markdown(
-    f"Kepler measured this star's brightness every 29.4 minutes. Every three months "
-    f"the spacecraft rolled to keep its solar panels facing the Sun, so NASA's "
-    f"archive splits the data into **quarters**. We look up the star's catalog "
-    f"number (KIC {star.kic}) and download all {len(quarters)} quarters."
-)
-plot(plots.raw_quarters(quarters))
+segment = SEGMENT[star.mission]
+st.header(f"① Download what {star.mission} saw", divider="gray")
+if star.mission == "Kepler":
+    st.markdown(
+        f"Kepler measured this star's brightness every 29.4 minutes. Every three months "
+        f"the spacecraft rolled to keep its solar panels facing the Sun, so NASA's "
+        f"archive splits the data into **quarters**. We look up the star's catalog "
+        f"number ({star.catalog_name}) and download all {len(segments)} quarters."
+    )
+else:
+    how_often = ("every 2 minutes" if segments[0].meta.get("AUTHOR") == "SPOC" else
+                 "every 3 to 30 minutes (depending on the year) in its pictures of the whole strip")
+    averaged = round(float(np.median(np.diff(segments[0].time.value))) * 24 * 60)
+    st.markdown(
+        f"TESS watches one strip of sky, 24° wide and 96° long, for about 27 days, a "
+        f"**sector**, then turns to the next. Most stars get a sector or two every couple "
+        f"of years; stars near the poles of the sky, where the strips overlap, stay in "
+        f"view much longer. We look up the star's catalog number ({star.catalog_name}) "
+        f"and download all {len(segments)} sectors. TESS measured this star's brightness "
+        f"{how_often}; to keep things quick, we average those into {averaged}-minute stretches."
+    )
+plot(plots.raw_segments(segments))
 st.caption(
     "Alternating colors mark the quarters. Each roll put the star on a different "
     "part of Kepler's camera, so each quarter reads at a different level."
+    if star.mission == "Kepler" else
+    "Alternating colors mark the sectors. Each one put the star on a different part "
+    "of TESS's cameras, so each sector reads at a different level. The short gap in "
+    "the middle of each sector is TESS sending its data back to Earth."
 )
-show_code(fetch.find_star, fetch.download_light_curves)
+show_code(fetch.find_star, fetch.download_light_curves, *([fetch.search_tess] if star.mission == "TESS" else []))
 
 # ── ② Clean ──────────────────────────────────────────────────────────────────
 st.header("② Clean and join", divider="gray")
-light_curve = process.clean(quarters)
+light_curve = process.clean(segments)
 st.markdown(
-    "To join the quarters, we divide each one by its own average, so *normal "
+    f"To join the {segment}s, we divide each one by its own average, so *normal "
     "brightness* means the same thing everywhere. We also drop moments with no "
     "measurement. From here on, brightness is shown in **parts per million (ppm)** "
     "above or below normal: 100 ppm is 0.01%."
@@ -266,7 +289,7 @@ show_code(process.flatten, process.remove_outliers)
 # ── ④ Search ─────────────────────────────────────────────────────────────────
 st.header("④ Search for repeating dips", divider="gray")
 with st.spinner(f"Trying every orbit from {days(min_period)} to {days(max_period)}…"):
-    periodogram, first_guess = search(flat, star.kic, window_days, min_period, max_period)
+    periodogram, first_guess = search(flat, star.catalog_name, window_days, min_period, max_period)
 st.markdown(
     f"One dip is too small to see, but a planet repeats its dip on every orbit. "
     f"**Box Least Squares** tries {len(periodogram.period):,} possible orbits "
@@ -312,7 +335,7 @@ if story == targets.ECLIPSES:
     show_code(process.find_second_eclipse, process.fold)
 
     st.header("⑥ What we found", divider="gray")
-    star_size = fetch.star_radius(planets, quarters)
+    star_size = fetch.star_radius(planets, segments)
     size_suns = star_size * np.sqrt(first_guess.depth) if star_size else None
     columns = st.columns(3)
     columns[0].metric("Orbit", days(round(first_guess.period, 1)))
@@ -350,7 +373,7 @@ if others:
         f"Our strongest signal {which}. You can also fold on an orbit NASA has "
         f"already published, and measure that planet's dip in our data:"
     )
-    fold_on = st.selectbox("Fold on", [OUR_SIGNAL, *others], key=f"fold_on_{star.kic}")
+    fold_on = st.selectbox("Fold on", [OUR_SIGNAL, *others], key=f"fold_on_{star.catalog_name}")
 
 if fold_on == OUR_SIGNAL:
     st.markdown(
@@ -382,7 +405,7 @@ show_code(*code)
 
 # ── ⑥ Results ────────────────────────────────────────────────────────────────
 st.header("⑥ What we found", divider="gray")
-star_size = fetch.star_radius(planets, quarters)
+star_size = fetch.star_radius(planets, segments)
 radius = process.planet_radius(signal, star_size) if star_size and signal.depth > 0 else None
 
 columns = st.columns(3)
@@ -473,7 +496,7 @@ st.markdown(
     f"orbit from {days(min_period)} to {days(max_period)}, so this takes a while. Set how "
     f"many rounds with **Planets to find** in the sidebar."
 )
-settings = (star.kic, window_days, min_period, max_period, planets_to_find)
+settings = (star.catalog_name, window_days, min_period, max_period, planets_to_find)
 if st.button(f"Search for up to {planets_to_find} planets", type="primary"):
     st.session_state[f"ran {settings}"] = True
 if st.session_state.get(f"ran {settings}"):
@@ -482,7 +505,7 @@ if st.session_state.get(f"ran {settings}"):
         st.write(f"Round 1: {days(round(our_signal.period, 3))} (from step ⑤)")
         for number in range(2, planets_to_find + 1):
             status.update(label=f"Round {number} of {planets_to_find}: hiding what we've found and searching again…")
-            found.append(next_planet(light_curve, star.kic, window_days, min_period, max_period,
+            found.append(next_planet(light_curve, star.catalog_name, window_days, min_period, max_period,
                                      tuple(astuple(s) for s in found)))
             st.write(f"Round {number}: {days(round(found[-1].period, 3))}")
         status.update(label=f"Searched {planets_to_find} times", state="complete", expanded=False)

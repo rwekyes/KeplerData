@@ -4,25 +4,25 @@ from dataclasses import dataclass
 import numpy as np
 from astropy.timeseries import BoxLeastSquares
 
-CADENCE_DAYS = 29.4244 / (60 * 24)  # Kepler measured each star's brightness every 29.4 minutes
 EARTH_RADII_PER_SUN = 109.1
 
 
 @dataclass
 class Signal:
     period: float        # days between dips
-    transit_time: float  # when one dip happened (Kepler's clock, in days)
+    transit_time: float  # when one dip happened (the telescope's clock, in days)
     duration: float      # how long each dip lasts, in days
     depth: float         # how much dimmer the star gets (0.001 = 0.1%)
 
 
-def clean(quarters):
-    """Join every quarter into one light curve, scaled so the star's normal brightness is 1.
+def clean(segments):
+    """Join every quarter (Kepler) or sector (TESS) into one light curve, scaled so
+    the star's normal brightness is 1.
 
-    Lightkurve already drops measurements Kepler flagged as bad (e.g. during
-    thruster firings); here we also drop gaps where there's no measurement.
+    Lightkurve already drops measurements the telescope flagged as bad (e.g.
+    during thruster firings); here we also drop gaps where there's no measurement.
     """
-    return quarters.stitch().remove_nans()
+    return segments.stitch().remove_nans()
 
 
 def flatten(light_curve, window_days=1.0, transit_mask=None):
@@ -31,7 +31,8 @@ def flatten(light_curve, window_days=1.0, transit_mask=None):
     The window should be much longer than a transit, or the transits get
     flattened away too. transit_mask marks known dips to protect them.
     """
-    window = int(window_days / CADENCE_DAYS) | 1  # needs an odd number of points
+    cadence = np.median(np.diff(light_curve.time.value))  # days between measurements
+    window = int(window_days / cadence) | 1  # needs an odd number of points
     return light_curve.flatten(window_length=window, mask=transit_mask)
 
 
@@ -81,7 +82,7 @@ def search_for_planet(light_curve, min_period=0.5, max_period=20):
 
 
 def _averages(time, flux, flux_err, hours):
-    """Average the measurements in each stretch of this many hours (Kepler took about two per hour)."""
+    """Average the measurements in each stretch of this many hours."""
     stretch = np.floor((time - time.min()) * 24 / hours).astype(int)
     count = np.bincount(stretch)
     has_data = count > 0
@@ -113,7 +114,7 @@ def _strongest_signal(search):
 def _period_grid(time, min_period, max_period, oversample=2):
     """Periods to try, spaced closely enough that we can't miss a dip.
 
-    Over 4 years, a slightly wrong period makes the predicted dips drift away
+    Over years of data, a slightly wrong period makes the predicted dips drift away
     from the real ones. Planets on longer orbits have longer dips, which
     tolerate more drift, so the grid can thin out at long periods.
     """

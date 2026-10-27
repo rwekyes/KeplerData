@@ -68,6 +68,31 @@ FEATURED = [
         "times and in irregular shapes. No planet does that.",
         lookup="KIC 8462852", story=DIPS,
     ),
+    Target(
+        "π Mensae", "TESS's first planet",
+        "The first planet found by TESS, Kepler's successor, announced in September 2018. "
+        "π Mensae c is about twice Earth's size and circles its star every 6.3 days. The "
+        "star is much like the Sun, and bright enough to see without a telescope from the "
+        "Southern Hemisphere. Two more planets, found from the star's wobble, never pass "
+        "in front of it, so they leave no dips.",
+        lookup="pi Men",
+    ),
+    Target(
+        "TOI-700", "TESS: Earth-size, habitable zone",
+        "A small, cool star about 100 light-years away, near the south pole of the sky, "
+        "where TESS's views overlap, so TESS has watched it for years. In January 2020, "
+        "TOI-700 d became TESS's first Earth-sized planet in its star's habitable zone; "
+        "TOI-700 e, another one, followed in 2023. One search finds the biggest planet; "
+        "step ⑦ hunts for the rest.",
+        periods=(5.0, 50.0), planets_to_find=4,
+        missed_notes={"TOI-700 e": (
+            "TOI-700 e is the smallest of the four, and its 28-day orbit gives fewer dips to "
+            "stack than TOI-700 b's 10-day orbit, so its signal is the faintest. Astronomers "
+            "announced it in 2023, three years after the others, once TESS had watched the "
+            "star for another year. A simple search still can't pick it out of the noise; "
+            "step ⑧ folds on NASA's orbit and shows its dip."
+        )},
+    ),
 ]
 
 

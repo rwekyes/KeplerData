@@ -3,7 +3,8 @@
 Goal: an interactive web app that shows the Kepler data workflow step by step:
 pull real light curves, clean them, find planets, and plot the results. You
 present it live in class (10–20 min) for an audience of non-programmers, and
-afterward the teacher and students can open it themselves and try any Kepler star.
+afterward the teacher and students can open it themselves and try any Kepler
+star, or any star TESS has measured.
 
 ## Design principles
 
@@ -19,9 +20,10 @@ afterward the teacher and students can open it themselves and try any Kepler sta
   set of featured targets also ships pre-processed in the repo, so the app still
   works if MAST or the network is having a bad day.
 - **Readable on a projector and on a phone.** Large text, high-contrast plots,
-  and nothing that depends on a huge screen.
-- **Forgiving of bad input.** Typos, stars with no Kepler data, and TESS-only
-  targets get a friendly message and suggestions, not a stack trace.
+  and nothing that depends on a huge screen. A light theme for the projector and
+  a dark one for everyone else, switchable from the app's ⋮ menu.
+- **Forgiving of bad input.** Typos and stars neither Kepler nor TESS measured
+  get a friendly message and suggestions, not a stack trace.
 
 ## Stack
 
@@ -29,7 +31,7 @@ afterward the teacher and students can open it themselves and try any Kepler sta
 |---|---|
 | **Streamlit** | The app: pure Python, top-to-bottom scripts that stay readable when shown on screen |
 | **Plotly** | Interactive plots (zoom into a transit, hover for values) |
-| **lightkurve** | Search/download Kepler light curves from MAST; stitching, flattening, folding |
+| **lightkurve** | Search/download Kepler and TESS light curves from MAST; stitching, flattening, folding |
 | **astropy** | Units, time handling, `BoxLeastSquares` period search |
 | **astroquery** | Known planet parameters from the NASA Exoplanet Archive |
 | **numpy / pandas** | Array math and tables |
@@ -246,6 +248,59 @@ before class.
   modules (the same `AttributeError` as on the cloud). Use `pkill -9`, or
   wait before restarting.
 
+### Findings from the TESS and dark-mode update
+
+- **Which telescope:** `find_star` uses Kepler's data for any star with a KIC
+  number (four unbroken years beat TESS's month-long sectors), and TESS's for
+  everything else. A name starting with TIC or TOI always gets TESS's data, so
+  `TIC 377780790` shows TESS's view of Kepler-10. K2-only stars now get TESS
+  data when it exists.
+- **Which TESS data:** SPOC's 2-minute light curves when the star was picked for a
+  close watch, otherwise TESS-SPOC's light curves from full-frame images (every
+  30, 10, or 3.3 minutes depending on the year). One MAST search returns both; we
+  filter the table instead of searching twice (each search takes 5–20 s).
+- **We average TESS's data before anything else:** 2-minute data into 10-minute
+  stretches, and full-frame data into 30-minute stretches, so all its sectors
+  match. TOI-700's 37 sectors are 590k measurements (68 MB just for the light
+  curve) at 2 minutes and 119k after averaging; Kepler-10 has about 65k.
+  lightkurve's `bin()` takes about 1.3 s for 11 sectors. That's slow but fine,
+  since it's cached.
+- **Each telescope has its own clock.** Kepler's BKJD starts at BJD 2454833
+  (noon, 1 Jan 2009) and TESS's BTJD at BJD 2457000 (noon, 8 Dec 2014). The
+  archive's transit times and the plot dates both convert using
+  `lc.time.format` (`"bkjd"` or `"btjd"`). The flatten window now uses the
+  measured time between points instead of Kepler's fixed 29.4 minutes.
+- **π Mensae:** finds π Men c at 6.268 d, 2.04× Earth (NASA: 2.02×). Its other two
+  planets don't transit (`tran_flag` = 0), the same lesson as Kepler-10 d. The
+  archive files it under `HD 39091`, and `_rename_planet` relabels it.
+  Download: 24 sectors in 69 s the first time; search: 9 s.
+- **TOI-700 (5–50 d, 4 rounds):** finds c (16.05 d), then b (9.977 d), then
+  **d (37.42 d, 0.99× Earth vs. NASA's 1.15×)**, the habitable-zone planet. Round
+  4 is noise (41 d); it misses **e**, announced in 2023, the same "simple search
+  stops here" story as Kepler-90 i. Folding on NASA's orbits measures all four
+  within 10% (b 1.02 vs. 0.96, c 2.34 vs. 2.54, e 0.96 vs. 0.92, d 1.19 vs.
+  1.15). Download: 37 sectors in 80 s the first time; each round: 11 s.
+- **Memory:** loading TOI-700 peaks at about 600 MB while reading its 37 raw
+  sectors (Kepler-90: 390 MB); after averaging, what's cached is small. The
+  local server grew to 2.2 GB after hours of testing many stars. Watch this in
+  the Phase 4 load test.
+- **Short dips:** the search's shortest box is 1 hour. That's fine for both
+  featured TESS stars, but small red dwarfs can have shorter dips (LHS 3844 b's
+  lasts 31 min), and a 1-hour box would underestimate how deep they are.
+- **Dark mode: plots must use `theme="streamlit"`.** Streamlit fills in the
+  theme's text and background colors for `theme=None` plots too, but only when
+  they're first drawn: after a live switch they stay white, even after a rerun.
+  `theme="streamlit"` plots recolor instantly. That theme shrinks axis text, so
+  `_style` sets tick and title sizes itself. Everything not tied to the data is
+  a see-through gray (`rgba(128,128,128,…)`) that works on both backgrounds.
+- **`st.context.theme` can't drive the plots:** it still said `light` after a
+  switch to dark (as its docs warn).
+- **Which theme opens first:** with `[theme.light]` and `[theme.dark]` in
+  `config.toml`, the app follows the computer's light/dark setting, even with
+  `base = "light"`. A choice in ⋮ → Light/Dark is saved in that browser
+  (`stActiveTheme` in localStorage). **On the class laptop, pick Light once.**
+- **Blurbs for π Mensae and TOI-700 are from memory too.** Verify before quoting.
+
 ## Where it runs
 
 - **In class:** run locally on your laptop (`streamlit run app.py`) and open it
@@ -283,8 +338,8 @@ before class.
   button, so you control the pacing. With it off, all the steps are on one page
   for people exploring on their own.
 - **Featured targets** each come with a short blurb about why they matter.
-  **Search** accepts any name lightkurve understands (Kepler-XX, KIC numbers,
-  KOI numbers).
+  **Search** accepts Kepler-XX names, KIC, KOI, TOI, and TIC numbers, and star
+  names MAST knows (π Men, Boyajian's Star).
 - **Kepler-90** gets an extra multi-planet section (see below).
 
 ### Featured targets
@@ -296,6 +351,8 @@ before class.
 | **Kepler-22** | Kepler's first planet in a star's habitable zone (2011) | A long orbit (~290 d), so only a few transits in four years |
 | **Kepler-90** | 8 planets; the 8th was found in 2017 by a neural network trained at Google | Finding several planets, and the limits of a simple search |
 | **Boyajian's Star** (KIC 8462852) | Irregular, deep dips that no planet explains | Not every dip is a planet |
+| **π Mensae** (TESS) | TESS's first planet (2018); π Men c is about 2× Earth | The basic process on TESS data; two planets that don't transit |
+| **TOI-700** (TESS) | TESS's first Earth-size planet in a habitable zone (d, 2020); e followed in 2023 | Search, hide, repeat finds 3 of 4, missing the one found later |
 
 These facts are from memory. Verify them against your sources for the report.
 
@@ -326,7 +383,7 @@ KeplerData/
 ├── app.py                   # Streamlit entry point: layout, sidebar, step flow
 ├── kepler/                  # at the root (not src/) so Streamlit imports it without path hacks
 │   ├── targets.py           # featured targets: names, blurbs, steps to run
-│   ├── fetch.py             # MAST download, archive query, cache fallback
+│   ├── fetch.py             # find the star, pick Kepler or TESS, MAST download, archive query
 │   ├── process.py           # clean, stitch, flatten, period search, fold, multi-planet loop
 │   └── plots.py             # Plotly figures with shared projector-friendly styling
 ├── scripts/
@@ -335,7 +392,7 @@ KeplerData/
 ├── data/
 │   ├── raw/                 # lightkurve download cache (gitignored)
 │   └── featured/            # compact stitched light curves + archive params (committed)
-└── .streamlit/config.toml   # theme, fonts
+└── .streamlit/config.toml   # light and dark themes, font size
 ```
 
 The "Show the code" panels use `inspect.getsource()` on the functions in
@@ -430,10 +487,12 @@ The "Show the code" panels use `inspect.getsource()` on the functions in
 - Streamlit + Plotly: https://docs.streamlit.io/develop/api-reference/charts/st.plotly_chart
 - Plotly Python: https://plotly.com/python/
 - Streamlit Community Cloud (deploying, Python versions, resource limits): https://docs.streamlit.io/deploy/streamlit-community-cloud
+- Streamlit theming (`[theme.light]` / `[theme.dark]`): https://docs.streamlit.io/develop/concepts/configuration/theming
 
 **Data sources**
 - Lightkurve API reference: https://lightkurve.github.io/lightkurve/
 - MAST Kepler mission page (data products, quality flags, archive manuals): https://archive.stsci.edu/missions-and-data/kepler
+- MAST TESS mission page (sectors, SPOC and TESS-SPOC products): https://archive.stsci.edu/missions-and-data/tess
 - NASA Exoplanet Archive: https://exoplanetarchive.ipac.caltech.edu/
 - `pscomppars` column definitions: https://exoplanetarchive.ipac.caltech.edu/docs/API_PS_columns.html
 - astroquery NASA Exoplanet Archive module: https://astroquery.readthedocs.io/en/latest/ipac/nexsci/nasa_exoplanet_archive.html

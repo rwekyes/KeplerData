@@ -1,5 +1,10 @@
-# Light theme and larger text, so the app reads well on a projector.
+# Larger text, so the app reads well on a projector, and two themes: light
+# (best on a projector) and dark. Switch between them in ⋮ (top right) → Settings.
 [theme]
-base = "light"
-primaryColor = "#2a78d6"
 baseFontSize = 18
+
+[theme.light]
+primaryColor = "#2a78d6"
+
+[theme.dark]
+primaryColor = "#4b94ea"
